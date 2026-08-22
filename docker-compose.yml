@@ -16,6 +16,13 @@ services:
       # Optional basic auth — uncomment and set to enable:
       # - LANTERN_AUTH_USER=admin
       # - LANTERN_AUTH_PASS=changeme
+      - LANTERN_DB_PATH=/data/lantern.db
+      # Hours before a service is marked 'stale' if no update received (default: 24)
+      - LANTERN_STALE_HOURS=${LANTERN_STALE_HOURS:-24}
+      # Optional Discord/Slack/generic webhook URL for status change alerts:
+      # - LANTERN_WEBHOOK_URL=https://discord.com/api/webhooks/...
+      # Demo mode — seeds fake data if DB is empty (set to 'true' to enable):
+      # - LANTERN_DEMO=false
 
 volumes:
   lantern_data:

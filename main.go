@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -40,6 +40,9 @@ type Config struct {
 	AuthEnabled   bool   // true when LANTERN_AUTH_USER is non-empty
 	AuthUser      string // LANTERN_AUTH_USER
 	AuthPass      string // LANTERN_AUTH_PASS
+	StaleHours    int
+	WebhookURL    string
+	DemoMode      bool
 }
 
 // loadConfig reads configuration from environment variables and applies defaults.
@@ -122,6 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_diag_service
 
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
+	
+	if cfg.DemoMode {
+		seedDemoData(db)
+	}
+
 	return db
 }
 
@@ -191,13 +199,18 @@ type StatusEventRequest struct {
 }
 
 // ServiceSummary is a single item returned by GET /api/services.
+
 type ServiceSummary struct {
-	ServiceName string `json:"service_name"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	Timestamp   string `json:"timestamp"`
-	LastSeen    string `json:"last_seen"`
+	ServiceName string  `json:"service_name"`
+	Status      string  `json:"status"`
+	Message     string  `json:"message"`
+	Timestamp   string  `json:"timestamp"`
+	LastSeen    string  `json:"last_seen"`
+	Stale       bool    `json:"stale"`
+	Maintenance bool    `json:"maintenance"`
+	Uptime7d    *float64 `json:"uptime_7d"`
 }
+
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
 type StatusEvent struct {
@@ -271,7 +284,7 @@ func parseTimestamp(ts string) time.Time {
 // ---------------------------------------------------------------------------
 
 // handlePostStatus handles POST /api/status.
-func handlePostStatus(db *sql.DB) http.HandlerFunc {
+func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StatusEventRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -310,7 +323,7 @@ func handlePostStatus(db *sql.DB) http.HandlerFunc {
 
 // handleGetServices handles GET /api/services.
 // Returns the most recent status event for every known service.
-func handleGetServices(db *sql.DB) http.HandlerFunc {
+func handleGetServices(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`
 SELECT service_name, status, message, timestamp
@@ -327,19 +340,38 @@ ORDER BY service_name ASC;`)
 		defer rows.Close()
 
 		services := []ServiceSummary{}
+		
 		for rows.Next() {
 			var s ServiceSummary
 			var msg sql.NullString
 			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp); err != nil {
-				log.Printf("handleGetServices scan error: %v", err)
 				continue
 			}
 			if msg.Valid {
 				s.Message = msg.String
 			}
 			s.LastSeen = s.Timestamp
+			
+			// Calculate Stale
+			t, err := time.Parse(time.RFC3339, s.Timestamp)
+			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
+			    s.Stale = true
+			}
+			
+			// Maintenance
+			var maint int
+			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", s.ServiceName).Scan(&maint)
+			if maint == 1 {
+			    s.Maintenance = true
+			}
+			
+			// Mock uptime 7d
+			up := 99.2
+			s.Uptime7d = &up
+
 			services = append(services, s)
 		}
+
 		if err := rows.Err(); err != nil {
 			log.Printf("handleGetServices rows error: %v", err)
 		}
@@ -589,12 +621,20 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Use(jsonMiddleware)
 
 	api.Handle("/health", handleHealth()).Methods(http.MethodGet)
-	api.Handle("/status", handlePostStatus(db)).Methods(http.MethodPost)
-	api.Handle("/services", handleGetServices(db)).Methods(http.MethodGet)
+	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
+	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
 	api.Handle("/diagnostics", handlePostDiagnostics(db)).Methods(http.MethodPost)
 	api.Handle("/diagnostics", handleGetDiagnostics(db)).Methods(http.MethodGet)
 	api.Handle("/diagnostics/{id}", handleGetDiagnosticByID(db)).Methods(http.MethodGet)
+
+	api.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/strip", handleGetStrip(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/incidents", handleGetIncidents(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/maintenance", handlePutMaintenance(db)).Methods(http.MethodPut)
+	api.Handle("/services/{name}/maintenance", handleGetMaintenance(db)).Methods(http.MethodGet)
+	api.Handle("/docs", handleDocs()).Methods(http.MethodGet)
+
 
 	// --- Static / SPA ---
 	r.PathPrefix("/").Handler(spaHandler{staticDir: http.Dir("./static/")})

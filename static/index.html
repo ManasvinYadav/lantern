@@ -8,43 +8,58 @@
     /* =====================================================================
        CSS Custom Properties (Design Tokens)
        ===================================================================== */
-    :root {
-      --bg:            #0f1117;
-      --bg-card:       #1a1d27;
-      --bg-card-hover: #1f2235;
-      --bg-input:      #12151f;
-      --border:        #2a2d3e;
-      --border-focus:  #4c5280;
-      --text-primary:  #e8eaf0;
-      --text-secondary:#8b90a8;
-      --text-muted:    #555a72;
-      --font-mono:     'SFMono-Regular', 'Cascadia Code', 'Fira Code', Menlo, Consolas, monospace;
+    
+/* Themes */
+:root, [data-theme="dark"] {
+  --bg: #0f1117; --bg-card: #1a1d27; --bg-card-hover: #1f2235;
+  --bg-input: #12151f; --border: #2a2d3e; --border-focus: #4c5280;
+  --text-primary: #e8eaf0; --text-secondary: #8b90a8; --text-muted: #555a72;
+  --up-bg: #1a2e22; --up-text: #4ade80; --up-border: #4ade80; --up-glow: rgba(74, 222, 128, 0.15);
+  --down-bg: #2d1a1a; --down-text: #f87171; --down-border: #f87171; --down-glow: rgba(248, 113, 113, 0.15);
+  --degraded-bg: #2d2614; --degraded-text: #fbbf24; --degraded-border: #fbbf24; --degraded-glow: rgba(251, 191, 36, 0.15);
+  --unknown-bg: #1f2235; --unknown-text: #94a3b8; --unknown-border: #4c5280; --unknown-glow: rgba(148, 163, 184, 0.1);
+}
 
-      --up-bg:         #0d2818;
-      --up-text:       #4ade80;
-      --up-border:     #166534;
-      --up-glow:       rgba(74, 222, 128, 0.18);
+[data-theme="light"] {
+  --bg: #f5f7fa; --bg-card: #ffffff; --bg-card-hover: #f0f2f8;
+  --bg-input: #eef0f5; --border: #d1d5e0; --border-focus: #6366f1;
+  --text-primary: #1a1d2e; --text-secondary: #4b5380; --text-muted: #9099b8;
+  --up-bg: #dcfce7; --up-text: #16a34a; --up-border: #86efac; --up-glow: rgba(22,163,74,0.15);
+  --down-bg: #fee2e2; --down-text: #dc2626; --down-border: #fca5a5; --down-glow: rgba(220,38,38,0.15);
+  --degraded-bg: #fef9c3; --degraded-text: #ca8a04; --degraded-border: #fde047; --degraded-glow: rgba(202,138,4,0.15);
+  --unknown-bg: #f1f5f9; --unknown-text: #64748b; --unknown-border: #cbd5e1; --unknown-glow: rgba(100,116,139,0.1);
+}
 
-      --down-bg:       #2a0d0d;
-      --down-text:     #f87171;
-      --down-border:   #7f1d1d;
-      --down-glow:     rgba(248, 113, 113, 0.18);
+[data-theme="tokyo-night"] {
+  --bg: #1a1b26; --bg-card: #24283b; --bg-card-hover: #2a2e42;
+  --bg-input: #1f2335; --border: #3b4261; --border-focus: #7aa2f7;
+  --text-primary: #c0caf5; --text-secondary: #9aa5ce; --text-muted: #565f89;
+  --up-bg: #1a2632; --up-text: #9ece6a; --up-border: #41a6b5; --up-glow: rgba(158,206,106,0.15);
+  --down-bg: #2d1a1a; --down-text: #f7768e; --down-border: #f7768e; --down-glow: rgba(247,118,142,0.15);
+  --degraded-bg: #2d2200; --degraded-text: #e0af68; --degraded-border: #e0af68; --degraded-glow: rgba(224,175,104,0.15);
+  --unknown-bg: #1f2335; --unknown-text: #565f89; --unknown-border: #3b4261; --unknown-glow: rgba(86,95,137,0.1);
+}
 
-      --degraded-bg:   #261c04;
-      --degraded-text: #fbbf24;
-      --degraded-border:#78350f;
-      --degraded-glow: rgba(251, 191, 36, 0.18);
+[data-theme="catppuccin"] {
+  --bg: #1e1e2e; --bg-card: #313244; --bg-card-hover: #3d3f54;
+  --bg-input: #181825; --border: #45475a; --border-focus: #cba6f7;
+  --text-primary: #cdd6f4; --text-secondary: #a6adc8; --text-muted: #6c7086;
+  --up-bg: #1e2a1e; --up-text: #a6e3a1; --up-border: #a6e3a1; --up-glow: rgba(166,227,161,0.15);
+  --down-bg: #2d1e1e; --down-text: #f38ba8; --down-border: #f38ba8; --down-glow: rgba(243,139,168,0.15);
+  --degraded-bg: #2d2510; --degraded-text: #fab387; --degraded-border: #fab387; --degraded-glow: rgba(250,179,135,0.15);
+  --unknown-bg: #313244; --unknown-text: #6c7086; --unknown-border: #45475a; --unknown-glow: rgba(108,112,134,0.1);
+}
 
-      --unknown-bg:    #1c1c2a;
-      --unknown-text:  #94a3b8;
-      --unknown-border:#334155;
-      --unknown-glow:  rgba(148, 163, 184, 0.12);
+[data-theme="nord"] {
+  --bg: #2e3440; --bg-card: #3b4252; --bg-card-hover: #434c5e;
+  --bg-input: #292e3b; --border: #4c566a; --border-focus: #88c0d0;
+  --text-primary: #eceff4; --text-secondary: #d8dee9; --text-muted: #4c566a;
+  --up-bg: #2a3f3f; --up-text: #a3be8c; --up-border: #a3be8c; --up-glow: rgba(163,190,140,0.15);
+  --down-bg: #3f2a2a; --down-text: #bf616a; --down-border: #bf616a; --down-glow: rgba(191,97,106,0.15);
+  --degraded-bg: #3f3520; --degraded-text: #ebcb8b; --degraded-border: #ebcb8b; --degraded-glow: rgba(235,203,139,0.15);
+  --unknown-bg: #3b4252; --unknown-text: #4c566a; --unknown-border: #4c566a; --unknown-glow: rgba(76,86,106,0.1);
+}
 
-      --radius-sm:     6px;
-      --radius-md:     10px;
-      --radius-lg:     14px;
-      --shadow:        0 4px 24px rgba(0,0,0,0.4);
-    }
 
     /* =====================================================================
        Reset & Base
@@ -548,6 +563,12 @@
       .services-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
     }
   </style>
+
+    <script>
+        const savedTheme = localStorage.getItem('lantern_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+    </script>
+
 </head>
 <body>
   <div class="app">
