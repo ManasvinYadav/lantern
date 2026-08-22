@@ -23,7 +23,7 @@
 
 ```bash
 # Clone and start with Docker Compose
-git clone https://github.com/yourusername/lantern.git
+git clone https://github.com/ManasvinYadav/lantern.git
 cd lantern
 docker compose up -d
 
@@ -166,7 +166,7 @@ For public exposure, it is strongly recommended to put Lantern behind a reverse 
 ### Run locally
 
 ```bash
-git clone https://github.com/yourusername/lantern.git
+git clone https://github.com/ManasvinYadav/lantern.git
 cd lantern
 
 # Use a local DB path for development

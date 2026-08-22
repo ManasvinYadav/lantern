@@ -1,4 +1,4 @@
-module github.com/yourusername/lantern
+module github.com/ManasvinYadav/lantern
 
 go 1.22
 
