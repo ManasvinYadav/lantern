@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔆 Lantern — Service Dashboard</title>
+  <style>
+    /* =====================================================================
+       CSS Custom Properties (Design Tokens)
+       ===================================================================== */
+    :root {
+      --bg:            #0f1117;
+      --bg-card:       #1a1d27;
+      --bg-card-hover: #1f2235;
+      --bg-input:      #12151f;
+      --border:        #2a2d3e;
+      --border-focus:  #4c5280;
+      --text-primary:  #e8eaf0;
+      --text-secondary:#8b90a8;
+      --text-muted:    #555a72;
+      --font-mono:     'SFMono-Regular', 'Cascadia Code', 'Fira Code', Menlo, Consolas, monospace;
+
+      --up-bg:         #0d2818;
+      --up-text:       #4ade80;
+      --up-border:     #166534;
+      --up-glow:       rgba(74, 222, 128, 0.18);
+
+      --down-bg:       #2a0d0d;
+      --down-text:     #f87171;
+      --down-border:   #7f1d1d;
+      --down-glow:     rgba(248, 113, 113, 0.18);
+
+      --degraded-bg:   #261c04;
+      --degraded-text: #fbbf24;
+      --degraded-border:#78350f;
+      --degraded-glow: rgba(251, 191, 36, 0.18);
+
+      --unknown-bg:    #1c1c2a;
+      --unknown-text:  #94a3b8;
+      --unknown-border:#334155;
+      --unknown-glow:  rgba(148, 163, 184, 0.12);
+
+      --radius-sm:     6px;
+      --radius-md:     10px;
+      --radius-lg:     14px;
+      --shadow:        0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    /* =====================================================================
+       Reset & Base
+       ===================================================================== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* =====================================================================
+       Layout
+       ===================================================================== */
+    .app {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 20px 60px;
+    }
+
+    /* =====================================================================
+       Header
+       ===================================================================== */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 28px 0 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .header-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: var(--text-primary);
+    }
+
+    .header-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .last-updated {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Loading indicator */
+    .loading-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      margin-right: 8px;
+      transition: background 0.3s;
+    }
+    .loading-dot.active {
+      background: #4ade80;
+      box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-focus);
+      color: var(--text-primary);
+    }
+    .btn:active { transform: scale(0.97); }
+
+    /* =====================================================================
+       Section headings
+       ===================================================================== */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .section-count {
+      font-size: 12px;
+      color: var(--text-muted);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+
+    /* =====================================================================
+       Status Badge
+       ===================================================================== */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .badge.up       { background: var(--up-bg);       color: var(--up-text);       border: 1px solid var(--up-border); }
+    .badge.down     { background: var(--down-bg);     color: var(--down-text);     border: 1px solid var(--down-border); }
+    .badge.degraded { background: var(--degraded-bg); color: var(--degraded-text); border: 1px solid var(--degraded-border); }
+    .badge.unknown  { background: var(--unknown-bg);  color: var(--unknown-text);  border: 1px solid var(--unknown-border); }
+
+    /* =====================================================================
+       Services Grid
+       ===================================================================== */
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 14px;
+      margin-bottom: 48px;
+    }
+
+    .service-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .service-card::before {
+      /* Accent line on the left */
+      content: '';
+      position: absolute;
+      left: 0; top: 12px; bottom: 12px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+    }
+    .service-card.up::before    { background: var(--up-text); }
+    .service-card.down::before  { background: var(--down-text); }
+    .service-card.degraded::before { background: var(--degraded-text); }
+    .service-card.unknown::before  { background: var(--unknown-text); }
+
+    .service-card:hover { background: var(--bg-card-hover); transform: translateY(-2px); }
+    .service-card.up:hover     { border-color: var(--up-border);       box-shadow: 0 0 0 1px var(--up-border),    0 8px 24px var(--up-glow); }
+    .service-card.down:hover   { border-color: var(--down-border);     box-shadow: 0 0 0 1px var(--down-border),  0 8px 24px var(--down-glow); }
+    .service-card.degraded:hover { border-color: var(--degraded-border); box-shadow: 0 0 0 1px var(--degraded-border), 0 8px 24px var(--degraded-glow); }
+    .service-card.unknown:hover  { border-color: var(--unknown-border);  box-shadow: 0 0 0 1px var(--unknown-border),  0 8px 24px var(--unknown-glow); }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .card-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      word-break: break-all;
+      padding-right: 8px;
+    }
+
+    .card-message {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 12px;
+      min-height: 18px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .card-footer {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* Empty state */
+    .empty-state {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+    .empty-state-icon { font-size: 36px; margin-bottom: 12px; }
+    .empty-state-text { font-size: 14px; }
+
+    /* =====================================================================
+       Modal (service detail)
+       ===================================================================== */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      z-index: 1000;
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      backdrop-filter: blur(4px);
+    }
+    .modal-overlay.hidden { display: none; }
+
+    .modal-panel {
+      width: 560px;
+      max-width: 100vw;
+      height: 100vh;
+      background: var(--bg-card);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      animation: slideIn 0.2s ease;
+      box-shadow: -8px 0 40px rgba(0,0,0,0.5);
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to   { transform: translateX(0);   opacity: 1; }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .modal-title-group { display: flex; flex-direction: column; gap: 6px; }
+
+    .modal-title {
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .modal-close {
+      width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 16px;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    .modal-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+    }
+    .modal-body::-webkit-scrollbar { width: 6px; }
+    .modal-body::-webkit-scrollbar-track { background: transparent; }
+    .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* =====================================================================
+       History Table
+       ===================================================================== */
+    .history-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 10px;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 9px 12px;
+      vertical-align: middle;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+    tbody tr:hover { background: rgba(255,255,255,0.04); }
+
+    .ts-cell {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .msg-cell {
+      max-width: 240px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* =====================================================================
+       Diagnostics Section
+       ===================================================================== */
+    .diag-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .diag-filter-label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    select:focus { border-color: var(--border-focus); }
+
+    .diag-list { display: flex; flex-direction: column; gap: 2px; }
+
+    .diag-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .diag-row:hover { border-color: var(--border-focus); }
+    .diag-row.expanded { border-color: var(--border-focus); }
+
+    .diag-summary {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 16px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .diag-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diag-service { font-size: 12px; }
+
+    .diag-ts {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .diag-chevron {
+      color: var(--text-muted);
+      font-size: 12px;
+      transition: transform 0.2s;
+    }
+    .diag-row.expanded .diag-chevron { transform: rotate(180deg); }
+
+    .diag-content-wrap {
+      display: none;
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .diag-row.expanded .diag-content-wrap { display: block; }
+
+    .diag-content-loading {
+      padding: 16px 0;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .diag-content-pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 420px;
+      overflow-y: auto;
+      margin-top: 12px;
+      line-height: 1.7;
+    }
+    .diag-content-pre::-webkit-scrollbar { width: 6px; }
+    .diag-content-pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* =====================================================================
+       Error / Notice banners
+       ===================================================================== */
+    .notice {
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      border: 1px solid;
+      margin-bottom: 14px;
+    }
+    .notice.error { background: var(--down-bg); border-color: var(--down-border); color: var(--down-text); }
+
+    /* =====================================================================
+       Responsive
+       ===================================================================== */
+    @media (max-width: 600px) {
+      .header { flex-direction: column; align-items: flex-start; }
+      .modal-panel { width: 100vw; }
+      .diag-summary { grid-template-columns: 1fr auto; }
+      .diag-service, .diag-ts { display: none; }
+      .services-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 900px) {
+      .services-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+
+    <!-- ================================================================
+         Header
+         ================================================================ -->
+    <header class="header">
+      <div class="header-left">
+        <div>
+          <div class="header-title">🔆 Lantern</div>
+          <div class="header-subtitle">Self-hosted service health dashboard</div>
+        </div>
+      </div>
+      <div class="header-meta">
+        <span class="loading-dot" id="loadingDot"></span>
+        <span class="last-updated" id="lastUpdated">Loading…</span>
+        <button class="btn" id="refreshBtn" title="Refresh now">
+          ↻ Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- ================================================================
+         Services Section
+         ================================================================ -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">Services</h2>
+        <span class="section-count" id="serviceCount">—</span>
+      </div>
+      <div id="servicesError"></div>
+      <div class="services-grid" id="servicesGrid">
+        <!-- Cards injected by JS -->
+      </div>
+    </section>
+
+    <!-- ================================================================
+         Diagnostics Section
+         ================================================================ -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">Diagnostic Runs</h2>
+        <span class="section-count" id="diagCount">—</span>
+      </div>
+      <div class="diag-controls">
+        <span class="diag-filter-label">Filter by service:</span>
+        <select id="diagFilter">
+          <option value="">All services</option>
+        </select>
+      </div>
+      <div id="diagError"></div>
+      <div class="diag-list" id="diagList">
+        <!-- Rows injected by JS -->
+      </div>
+    </section>
+
+  </div><!-- /.app -->
+
+  <!-- ================================================================
+       Service Detail Modal (slide-in drawer)
+       ================================================================ -->
+  <div class="modal-overlay hidden" id="modalOverlay">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-title" id="modalTitle">Service</span>
+          <span id="modalBadge"></span>
+        </div>
+        <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="history-label">Event History</div>
+        <div id="historyError"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Status</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ==================================================================
+       Constants & State
+       ================================================================== */
+    const API = {
+      services:    '/api/services',
+      history:     (name) => `/api/services/${encodeURIComponent(name)}/history?limit=50`,
+      diagnostics: '/api/diagnostics',
+      diagnostic:  (id)   => `/api/diagnostics/${id}`,
+    };
+
+    const REFRESH_INTERVAL_MS = 30_000;
+
+    let state = {
+      services:    [],
+      diagnostics: [],
+      diagFilter:  '',
+      refreshTimer: null,
+    };
+
+    /* ==================================================================
+       Utility helpers
+       ================================================================== */
+
+    /** Return a human-readable relative time string (e.g. "3m ago"). */
+    function relativeTime(isoString) {
+      if (!isoString) return '—';
+      const diffMs = Date.now() - new Date(isoString).getTime();
+      const s = Math.floor(diffMs / 1000);
+      if (s < 5)   return 'just now';
+      if (s < 60)  return `${s}s ago`;
+      const m = Math.floor(s / 60);
+      if (m < 60)  return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24)  return `${h}h ago`;
+      const d = Math.floor(h / 24);
+      return `${d}d ago`;
+    }
+
+    /** Format an ISO datetime string for compact display. */
+    function formatTS(isoString) {
+      if (!isoString) return '—';
+      const d = new Date(isoString);
+      return d.toLocaleString(undefined, {
+        month: '2-digit', day: '2-digit',
+        hour: '2-digit',  minute: '2-digit', second: '2-digit',
+        hour12: false,
+      });
+    }
+
+    /** Build a status badge element. */
+    function makeBadge(status) {
+      const span = document.createElement('span');
+      span.className = `badge ${status || 'unknown'}`;
+      span.textContent = status || 'unknown';
+      return span;
+    }
+
+    /** Show a loading dot animation. */
+    function setLoading(active) {
+      document.getElementById('loadingDot').classList.toggle('active', active);
+    }
+
+    /** Render an inline error notice. */
+    function renderError(containerId, msg) {
+      const el = document.getElementById(containerId);
+      if (msg) {
+        el.innerHTML = `<div class="notice error">⚠ ${msg}</div>`;
+      } else {
+        el.innerHTML = '';
+      }
+    }
+
+    /* ==================================================================
+       Data fetching
+       ================================================================== */
+
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+      return res.json();
+    }
+
+    async function loadServices() {
+      try {
+        state.services = await fetchJSON(API.services);
+        renderError('servicesError', '');
+        renderServices();
+        populateDiagFilter();
+      } catch (err) {
+        console.error('loadServices:', err);
+        renderError('servicesError', `Could not load services: ${err.message}`);
+      }
+    }
+
+    async function loadDiagnostics() {
+      const url = state.diagFilter
+        ? `${API.diagnostics}?service_name=${encodeURIComponent(state.diagFilter)}&limit=50`
+        : `${API.diagnostics}?limit=50`;
+      try {
+        state.diagnostics = await fetchJSON(url);
+        renderError('diagError', '');
+        renderDiagnostics();
+      } catch (err) {
+        console.error('loadDiagnostics:', err);
+        renderError('diagError', `Could not load diagnostics: ${err.message}`);
+      }
+    }
+
+    async function loadAll() {
+      setLoading(true);
+      await Promise.all([loadServices(), loadDiagnostics()]);
+      setLoading(false);
+      document.getElementById('lastUpdated').textContent =
+        `Last updated: ${new Date().toLocaleTimeString()}`;
+    }
+
+    /* ==================================================================
+       Services rendering
+       ================================================================== */
+
+    function renderServices() {
+      const grid = document.getElementById('servicesGrid');
+      const count = document.getElementById('serviceCount');
+      const services = state.services || [];
+
+      count.textContent = `${services.length} service${services.length !== 1 ? 's' : ''}`;
+
+      if (services.length === 0) {
+        grid.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">📡</div>
+            <div class="empty-state-text">No services reporting yet.<br>
+              Send a POST to <code>/api/status</code> to get started.</div>
+          </div>`;
+        return;
+      }
+
+      grid.innerHTML = '';
+      for (const svc of services) {
+        const card = document.createElement('div');
+        card.className = `service-card ${svc.status || 'unknown'}`;
+        card.setAttribute('role', 'button');
+        card.setAttribute('tabindex', '0');
+        card.setAttribute('aria-label', `${svc.service_name}: ${svc.status}`);
+
+        card.innerHTML = `
+          <div class="card-top">
+            <div class="card-name">${escapeHtml(svc.service_name)}</div>
+          </div>
+          <div style="margin-bottom:10px"></div>
+          <div class="card-message">${escapeHtml(svc.message || 'No message')}</div>
+          <div class="card-footer">${relativeTime(svc.timestamp)}</div>`;
+
+        // Insert badge after card-name
+        const cardTop = card.querySelector('.card-top');
+        cardTop.appendChild(makeBadge(svc.status));
+
+        card.addEventListener('click',  () => openModal(svc));
+        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openModal(svc); });
+
+        grid.appendChild(card);
+      }
+    }
+
+    /** Populate the diagnostics filter dropdown with known service names. */
+    function populateDiagFilter() {
+      const sel = document.getElementById('diagFilter');
+      const current = sel.value;
+      // Keep the "All services" option
+      sel.innerHTML = '<option value="">All services</option>';
+      const names = [...new Set(state.services.map(s => s.service_name))].sort();
+      for (const name of names) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        if (name === current) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+
+    /* ==================================================================
+       Service detail modal
+       ================================================================== */
+
+    function openModal(svc) {
+      document.getElementById('modalTitle').textContent = svc.service_name;
+      const badgeEl = document.getElementById('modalBadge');
+      badgeEl.innerHTML = '';
+      badgeEl.appendChild(makeBadge(svc.status));
+
+      const overlay = document.getElementById('modalOverlay');
+      overlay.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+
+      // Reset history table
+      document.getElementById('historyBody').innerHTML =
+        `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>`;
+      renderError('historyError', '');
+
+      loadHistory(svc.service_name);
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    async function loadHistory(serviceName) {
+      try {
+        const data = await fetchJSON(API.history(serviceName));
+        renderHistory(data.events || []);
+      } catch (err) {
+        console.error('loadHistory:', err);
+        renderError('historyError', `Could not load history: ${err.message}`);
+        document.getElementById('historyBody').innerHTML = '';
+      }
+    }
+
+    function renderHistory(events) {
+      const tbody = document.getElementById('historyBody');
+      if (!events.length) {
+        tbody.innerHTML = `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">No events found.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = events.map(e => `
+        <tr>
+          <td class="ts-cell">${formatTS(e.timestamp)}</td>
+          <td>${makeBadge(e.status).outerHTML}</td>
+          <td class="msg-cell" title="${escapeHtml(e.message || '')}">${escapeHtml(e.message || '—')}</td>
+        </tr>`).join('');
+    }
+
+    // Modal close handlers
+    document.getElementById('modalClose').addEventListener('click', closeModal);
+    document.getElementById('modalOverlay').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('modalOverlay')) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    /* ==================================================================
+       Diagnostics rendering
+       ================================================================== */
+
+    function renderDiagnostics() {
+      const list  = document.getElementById('diagList');
+      const count = document.getElementById('diagCount');
+      const runs  = state.diagnostics || [];
+
+      count.textContent = `${runs.length} run${runs.length !== 1 ? 's' : ''}`;
+
+      if (runs.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state" style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg)">
+            <div class="empty-state-icon">🩺</div>
+            <div class="empty-state-text">No diagnostic runs yet.</div>
+          </div>`;
+        return;
+      }
+
+      list.innerHTML = '';
+      for (const run of runs) {
+        const row = document.createElement('div');
+        row.className = 'diag-row';
+        row.dataset.id = run.id;
+
+        row.innerHTML = `
+          <div class="diag-summary">
+            <span class="diag-title">${escapeHtml(run.title)}</span>
+            <span class="diag-service">${makeBadge('unknown').outerHTML.replace('unknown', '').replace('badge unknown', 'badge unknown').replace('<span', '<span').replace('</span>', '</span>')}<span class="badge unknown" style="font-size:10px;padding:2px 8px">${escapeHtml(run.service_name)}</span></span>
+            <span class="diag-ts">${formatTS(run.timestamp)}</span>
+            <span class="diag-chevron">▼</span>
+          </div>
+          <div class="diag-content-wrap">
+            <div class="diag-content-loading" id="diagContent-${run.id}">Loading…</div>
+          </div>`;
+
+        row.querySelector('.diag-summary').addEventListener('click', () => toggleDiag(row, run.id));
+        list.appendChild(row);
+      }
+    }
+
+    const diagCache = {};
+
+    async function toggleDiag(row, id) {
+      const isExpanded = row.classList.contains('expanded');
+      // Collapse all others
+      document.querySelectorAll('.diag-row.expanded').forEach(r => r.classList.remove('expanded'));
+
+      if (isExpanded) return; // was open, now closed — done.
+
+      row.classList.add('expanded');
+      const contentEl = document.getElementById(`diagContent-${id}`);
+
+      if (diagCache[id]) {
+        renderDiagContent(contentEl, diagCache[id]);
+        return;
+      }
+
+      contentEl.textContent = 'Loading…';
+      try {
+        const data = await fetchJSON(API.diagnostic(id));
+        diagCache[id] = data.content;
+        renderDiagContent(contentEl, data.content);
+      } catch (err) {
+        contentEl.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    function renderDiagContent(el, content) {
+      el.outerHTML; // access before replacement
+      const pre = document.createElement('pre');
+      pre.className = 'diag-content-pre';
+      pre.textContent = content;
+      el.replaceWith(pre);
+    }
+
+    // Diagnostics filter
+    document.getElementById('diagFilter').addEventListener('change', (e) => {
+      state.diagFilter = e.target.value;
+      loadDiagnostics();
+    });
+
+    /* ==================================================================
+       Auto-refresh
+       ================================================================== */
+
+    function scheduleRefresh() {
+      clearTimeout(state.refreshTimer);
+      state.refreshTimer = setTimeout(async () => {
+        await loadAll();
+        scheduleRefresh();
+      }, REFRESH_INTERVAL_MS);
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      clearTimeout(state.refreshTimer);
+      await loadAll();
+      scheduleRefresh();
+    });
+
+    /* ==================================================================
+       XSS-safe HTML escaping
+       ================================================================== */
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    /* ==================================================================
+       Bootstrap
+       ================================================================== */
+    (async () => {
+      await loadAll();
+      scheduleRefresh();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+services:
+  lantern:
+    image: lantern:latest
+    build: .
+    container_name: lantern
+    restart: unless-stopped
+    ports:
+      - "${LANTERN_PORT:-7654}:7654"
+    volumes:
+      - lantern_data:/data
+    environment:
+      # Port the service listens on inside the container
+      - LANTERN_PORT=7654
+      # Data retention period in days (default: 30)
+      - LANTERN_RETENTION_DAYS=${LANTERN_RETENTION_DAYS:-30}
+      # Optional basic auth — uncomment and set to enable:
+      # - LANTERN_AUTH_USER=admin
+      # - LANTERN_AUTH_PASS=changeme
+
+volumes:
+  lantern_data:

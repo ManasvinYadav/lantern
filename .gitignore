@@ -1,0 +1,24 @@
+# Binaries
+lantern
+*.exe
+
+# Data
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Go
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.env
