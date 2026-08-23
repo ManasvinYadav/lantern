@@ -13,12 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"bytes"
+	"context"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -34,15 +37,19 @@ var validStatuses = map[string]bool{
 
 // Config holds runtime configuration sourced from environment variables.
 type Config struct {
-	Port          string // LANTERN_PORT, default "7654"
-	DBPath        string // LANTERN_DB_PATH, default "/data/lantern.db"
-	RetentionDays int    // LANTERN_RETENTION_DAYS, default 30
-	AuthEnabled   bool   // true when LANTERN_AUTH_USER is non-empty
-	AuthUser      string // LANTERN_AUTH_USER
-	AuthPass      string // LANTERN_AUTH_PASS
-	StaleHours    int
-	WebhookURL    string
-	DemoMode      bool
+	Port            string // LANTERN_PORT, default "7654"
+	DBPath          string // LANTERN_DB_PATH, default "/data/lantern.db"
+	RetentionDays   int    // LANTERN_RETENTION_DAYS, default 30
+	AuthEnabled     bool   // true when LANTERN_AUTH_USER is non-empty
+	AuthUser        string // LANTERN_AUTH_USER
+	AuthPass        string // LANTERN_AUTH_PASS
+	StaleHours      int
+	WebhookURL      string
+	DemoMode        bool
+	WebhookDiscord  string
+	WebhookTelegram string
+	WebhookGotify   string
+	WebhookGeneric  string
 }
 
 // loadConfig reads configuration from environment variables and applies defaults.
@@ -139,6 +146,12 @@ CREATE TABLE IF NOT EXISTS maintenance_windows (
 
 CREATE INDEX IF NOT EXISTS idx_maint_windows_service
     ON maintenance_windows(service_name, started_at);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+    token TEXT PRIMARY KEY,
+    service_name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -146,7 +159,7 @@ CREATE INDEX IF NOT EXISTS idx_maint_windows_service
 
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
-	
+
 	if cfg.DemoMode {
 		seedDemoData(db)
 	}
@@ -182,9 +195,26 @@ func runRetentionCleanup(db *sql.DB, cfg *Config) {
 // Middleware
 // ---------------------------------------------------------------------------
 
-// basicAuthMiddleware enforces HTTP Basic Auth when auth is enabled.
-func basicAuthMiddleware(cfg *Config, next http.Handler) http.Handler {
+// authMiddleware enforces HTTP Basic Auth or Bearer tokens.
+func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/public/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			var serviceName string
+			err := db.QueryRow("SELECT service_name FROM api_tokens WHERE token = ?", token).Scan(&serviceName)
+			if err == nil {
+				ctx := context.WithValue(r.Context(), "scoped_service", serviceName)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
 		if !cfg.AuthEnabled {
 			next.ServeHTTP(w, r)
 			return
@@ -222,16 +252,15 @@ type StatusEventRequest struct {
 // ServiceSummary is a single item returned by GET /api/services.
 
 type ServiceSummary struct {
-	ServiceName string  `json:"service_name"`
-	Status      string  `json:"status"`
-	Message     string  `json:"message"`
-	Timestamp   string  `json:"timestamp"`
-	LastSeen    string  `json:"last_seen"`
-	Stale       bool    `json:"stale"`
-	Maintenance bool    `json:"maintenance"`
+	ServiceName string   `json:"service_name"`
+	Status      string   `json:"status"`
+	Message     string   `json:"message"`
+	Timestamp   string   `json:"timestamp"`
+	LastSeen    string   `json:"last_seen"`
+	Stale       bool     `json:"stale"`
+	Maintenance bool     `json:"maintenance"`
 	Uptime7d    *float64 `json:"uptime_7d"`
 }
-
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
 type StatusEvent struct {
@@ -268,6 +297,65 @@ type DiagnosticRunSummary struct {
 type DiagnosticRunDetail struct {
 	DiagnosticRunSummary
 	Content string `json:"content"`
+}
+
+// ---------------------------------------------------------------------------
+// Background workers & Webhooks
+// ---------------------------------------------------------------------------
+
+func dispatchWebhooks(cfg *Config, service, oldStatus, newStatus, message string) {
+	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
+	if cfg.WebhookDiscord != "" {
+		payload := map[string]string{"content": text}
+		body, _ := json.Marshal(payload)
+		http.Post(cfg.WebhookDiscord, "application/json", bytes.NewBuffer(body))
+	}
+	if cfg.WebhookTelegram != "" {
+		// Telegram webhook URL should include the bot token and chat ID, e.g. https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
+		payload := map[string]string{"text": text}
+		body, _ := json.Marshal(payload)
+		http.Post(cfg.WebhookTelegram, "application/json", bytes.NewBuffer(body))
+	}
+	if cfg.WebhookGotify != "" {
+		payload := map[string]string{"title": "Lantern Alert", "message": text}
+		body, _ := json.Marshal(payload)
+		http.Post(cfg.WebhookGotify, "application/json", bytes.NewBuffer(body))
+	}
+	if cfg.WebhookGeneric != "" {
+		payload := map[string]string{"service": service, "old": oldStatus, "new": newStatus, "message": message}
+		body, _ := json.Marshal(payload)
+		http.Post(cfg.WebhookGeneric, "application/json", bytes.NewBuffer(body))
+	}
+}
+
+func runStaleChecker(db *sql.DB, cfg *Config) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		rows, err := db.Query(`
+SELECT service_name, status, timestamp
+FROM status_events
+WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
+`)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var name, status, ts string
+			rows.Scan(&name, &status, &ts)
+			var maint int
+			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint)
+			if maint == 1 || status == "down" || status == "stale" {
+				continue
+			}
+			t, err := time.Parse(time.RFC3339, ts)
+			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
+				db.Exec(`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, 'down', 'Service missed heartbeat timeout', ?)`, name, time.Now().UTC().Format(time.RFC3339))
+				go dispatchWebhooks(cfg, name, status, "down", "Service missed heartbeat timeout")
+			}
+		}
+		rows.Close()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +415,15 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 
 		ts := parseTimestamp(req.Timestamp)
 
+		scopedSvc := r.Context().Value("scoped_service")
+		if scopedSvc != nil && scopedSvc.(string) != req.ServiceName {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
+		var lastStatus string
+		db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", req.ServiceName).Scan(&lastStatus)
+
 		result, err := db.Exec(
 			`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, ?, ?, ?)`,
 			req.ServiceName, req.Status, req.Message, ts.Format(time.RFC3339),
@@ -338,6 +435,13 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 		}
 
 		id, _ := result.LastInsertId()
+
+		var maint int
+		db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", req.ServiceName).Scan(&maint)
+		if maint == 0 && lastStatus != "" && lastStatus != req.Status {
+			go dispatchWebhooks(cfg, req.ServiceName, lastStatus, req.Status, req.Message)
+		}
+
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
 }
@@ -361,7 +465,7 @@ ORDER BY service_name ASC;`)
 		defer rows.Close()
 
 		services := []ServiceSummary{}
-		
+
 		for rows.Next() {
 			var s ServiceSummary
 			var msg sql.NullString
@@ -372,20 +476,20 @@ ORDER BY service_name ASC;`)
 				s.Message = msg.String
 			}
 			s.LastSeen = s.Timestamp
-			
+
 			// Calculate Stale
 			t, err := time.Parse(time.RFC3339, s.Timestamp)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
-			    s.Stale = true
+				s.Stale = true
 			}
-			
+
 			// Maintenance
 			var maint int
 			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", s.ServiceName).Scan(&maint)
 			if maint == 1 {
-			    s.Maintenance = true
+				s.Maintenance = true
 			}
-			
+
 			// Compute real 7-day uptime from status_events
 			up := computeUptime7d(db, s.ServiceName)
 			s.Uptime7d = &up
@@ -484,6 +588,15 @@ func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 
 		ts := parseTimestamp(req.Timestamp)
 
+		scopedSvc := r.Context().Value("scoped_service")
+		if scopedSvc != nil && scopedSvc.(string) != req.ServiceName {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
+		var lastStatus string
+		db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", req.ServiceName).Scan(&lastStatus)
+
 		result, err := db.Exec(
 			`INSERT INTO diagnostic_runs (service_name, title, content, timestamp) VALUES (?, ?, ?, ?)`,
 			req.ServiceName, req.Title, req.Content, ts.Format(time.RFC3339),
@@ -495,6 +608,7 @@ func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 		}
 
 		id, _ := result.LastInsertId()
+
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
 }
@@ -656,6 +770,10 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Handle("/services/{name}/maintenance", handleGetMaintenance(db)).Methods(http.MethodGet)
 	api.Handle("/docs", handleDocs()).Methods(http.MethodGet)
 
+	publicApi := r.PathPrefix("/api/public").Subrouter()
+	publicApi.Use(jsonMiddleware)
+	publicApi.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
+	publicApi.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
 
 	// --- Static / SPA ---
 	r.PathPrefix("/").Handler(spaHandler{staticDir: http.Dir("./static/")})
@@ -669,7 +787,7 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	})
 
 	// --- Auth middleware wraps everything ---
-	return basicAuthMiddleware(cfg, c.Handler(r))
+	return authMiddleware(db, cfg, c.Handler(r))
 }
 
 // ---------------------------------------------------------------------------
@@ -683,6 +801,9 @@ func main() {
 
 	// Run retention cleanup in the background every hour.
 	go runRetentionCleanup(db, cfg)
+
+	// Background worker for missing heartbeats
+	go runStaleChecker(db, cfg)
 
 	router := setupRoutes(db, cfg)
 

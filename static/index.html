@@ -6,1105 +6,799 @@
   <title>🔆 Lantern — Service Dashboard</title>
   <style>
     /* =====================================================================
-       CSS Custom Properties (Design Tokens)
+       CSS Custom Properties & Reset
        ===================================================================== */
-    
-/* Themes */
-:root, [data-theme="dark"] {
-  --bg: #0f1117; --bg-card: #1a1d27; --bg-card-hover: #1f2235;
-  --bg-input: #12151f; --border: #2a2d3e; --border-focus: #4c5280;
-  --text-primary: #e8eaf0; --text-secondary: #8b90a8; --text-muted: #555a72;
-  --up-bg: #1a2e22; --up-text: #4ade80; --up-border: #4ade80; --up-glow: rgba(74, 222, 128, 0.15);
-  --down-bg: #2d1a1a; --down-text: #f87171; --down-border: #f87171; --down-glow: rgba(248, 113, 113, 0.15);
-  --degraded-bg: #2d2614; --degraded-text: #fbbf24; --degraded-border: #fbbf24; --degraded-glow: rgba(251, 191, 36, 0.15);
-  --unknown-bg: #1f2235; --unknown-text: #94a3b8; --unknown-border: #4c5280; --unknown-glow: rgba(148, 163, 184, 0.1);
-}
+    :root {
+      --bg: #0a0d14;
+      --panel-bg: rgba(255, 255, 255, 0.03);
+      --panel-hover: rgba(255, 255, 255, 0.06);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(255, 255, 255, 0.2);
+      
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #475569;
 
-[data-theme="light"] {
-  --bg: #f5f7fa; --bg-card: #ffffff; --bg-card-hover: #f0f2f8;
-  --bg-input: #eef0f5; --border: #d1d5e0; --border-focus: #6366f1;
-  --text-primary: #1a1d2e; --text-secondary: #4b5380; --text-muted: #9099b8;
-  --up-bg: #dcfce7; --up-text: #16a34a; --up-border: #86efac; --up-glow: rgba(22,163,74,0.15);
-  --down-bg: #fee2e2; --down-text: #dc2626; --down-border: #fca5a5; --down-glow: rgba(220,38,38,0.15);
-  --degraded-bg: #fef9c3; --degraded-text: #ca8a04; --degraded-border: #fde047; --degraded-glow: rgba(202,138,4,0.15);
-  --unknown-bg: #f1f5f9; --unknown-text: #64748b; --unknown-border: #cbd5e1; --unknown-glow: rgba(100,116,139,0.1);
-}
+      --up: #10b981;
+      --up-bg: rgba(16, 185, 129, 0.1);
+      --up-glow: rgba(16, 185, 129, 0.25);
+      
+      --down: #f43f5e;
+      --down-bg: rgba(244, 63, 94, 0.1);
+      --down-glow: rgba(244, 63, 94, 0.25);
+      
+      --degraded: #f59e0b;
+      --degraded-bg: rgba(245, 158, 11, 0.1);
+      --degraded-glow: rgba(245, 158, 11, 0.25);
+      
+      --maint: #8b5cf6;
+      --maint-bg: rgba(139, 92, 246, 0.1);
+      --maint-glow: rgba(139, 92, 246, 0.25);
+      
+      --unknown: #64748b;
+      --unknown-bg: rgba(100, 116, 139, 0.1);
+      --unknown-glow: rgba(100, 116, 139, 0.25);
 
-[data-theme="tokyo-night"] {
-  --bg: #1a1b26; --bg-card: #24283b; --bg-card-hover: #2a2e42;
-  --bg-input: #1f2335; --border: #3b4261; --border-focus: #7aa2f7;
-  --text-primary: #c0caf5; --text-secondary: #9aa5ce; --text-muted: #565f89;
-  --up-bg: #1a2632; --up-text: #9ece6a; --up-border: #41a6b5; --up-glow: rgba(158,206,106,0.15);
-  --down-bg: #2d1a1a; --down-text: #f7768e; --down-border: #f7768e; --down-glow: rgba(247,118,142,0.15);
-  --degraded-bg: #2d2200; --degraded-text: #e0af68; --degraded-border: #e0af68; --degraded-glow: rgba(224,175,104,0.15);
-  --unknown-bg: #1f2335; --unknown-text: #565f89; --unknown-border: #3b4261; --unknown-glow: rgba(86,95,137,0.1);
-}
+      --radius-sm: 6px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    }
 
-[data-theme="catppuccin"] {
-  --bg: #1e1e2e; --bg-card: #313244; --bg-card-hover: #3d3f54;
-  --bg-input: #181825; --border: #45475a; --border-focus: #cba6f7;
-  --text-primary: #cdd6f4; --text-secondary: #a6adc8; --text-muted: #6c7086;
-  --up-bg: #1e2a1e; --up-text: #a6e3a1; --up-border: #a6e3a1; --up-glow: rgba(166,227,161,0.15);
-  --down-bg: #2d1e1e; --down-text: #f38ba8; --down-border: #f38ba8; --down-glow: rgba(243,139,168,0.15);
-  --degraded-bg: #2d2510; --degraded-text: #fab387; --degraded-border: #fab387; --degraded-glow: rgba(250,179,135,0.15);
-  --unknown-bg: #313244; --unknown-text: #6c7086; --unknown-border: #45475a; --unknown-glow: rgba(108,112,134,0.1);
-}
-
-[data-theme="nord"] {
-  --bg: #2e3440; --bg-card: #3b4252; --bg-card-hover: #434c5e;
-  --bg-input: #292e3b; --border: #4c566a; --border-focus: #88c0d0;
-  --text-primary: #eceff4; --text-secondary: #d8dee9; --text-muted: #4c566a;
-  --up-bg: #2a3f3f; --up-text: #a3be8c; --up-border: #a3be8c; --up-glow: rgba(163,190,140,0.15);
-  --down-bg: #3f2a2a; --down-text: #bf616a; --down-border: #bf616a; --down-glow: rgba(191,97,106,0.15);
-  --degraded-bg: #3f3520; --degraded-text: #ebcb8b; --degraded-border: #ebcb8b; --degraded-glow: rgba(235,203,139,0.15);
-  --unknown-bg: #3b4252; --unknown-text: #4c566a; --unknown-border: #4c566a; --unknown-glow: rgba(76,86,106,0.1);
-}
-
-
-    /* =====================================================================
-       Reset & Base
-       ===================================================================== */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body {
       height: 100%;
       background: var(--bg);
       color: var(--text-primary);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-family: var(--font-sans);
       font-size: 14px;
       line-height: 1.6;
+      overflow-x: hidden;
     }
 
     a { color: inherit; text-decoration: none; }
+    
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
     /* =====================================================================
-       Layout
+       Layout & Header
        ===================================================================== */
-    .app {
-      max-width: 1280px;
+    .app-container {
+      max-width: 1200px;
       margin: 0 auto;
-      padding: 0 20px 60px;
+      padding: 0 24px 80px;
     }
 
-    /* =====================================================================
-       Header
-       ===================================================================== */
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 12px;
-      padding: 28px 0 24px;
+      gap: 16px;
+      padding: 32px 0;
       border-bottom: 1px solid var(--border);
       margin-bottom: 32px;
     }
 
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    .header-title { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px;}
+    .header-subtitle { font-size: 13px; color: var(--text-secondary); }
 
-    .header-title {
-      font-size: 22px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-      color: var(--text-primary);
-    }
-
-    .header-subtitle {
-      font-size: 12px;
-      color: var(--text-muted);
-      font-weight: 400;
-    }
-
-    .header-meta {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-
-    .last-updated {
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-
-    /* Loading indicator */
-    .loading-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-muted);
-      margin-right: 8px;
-      transition: background 0.3s;
-    }
-    .loading-dot.active {
-      background: #4ade80;
-      box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
-      animation: pulse 1s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.4; }
-    }
+    .header-right { display: flex; align-items: center; gap: 12px; }
 
     .btn {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 7px 14px;
+      padding: 8px 14px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
-      background: var(--bg-card);
-      color: var(--text-secondary);
+      background: var(--panel-bg);
+      color: var(--text-primary);
       font-size: 13px;
+      font-weight: 500;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      backdrop-filter: blur(8px);
+      transition: all 0.2s;
     }
-    .btn:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--border-focus);
-      color: var(--text-primary);
-    }
+    .btn:hover { background: var(--panel-hover); border-color: var(--border-focus); }
     .btn:active { transform: scale(0.97); }
+    
+    .btn.primary { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); }
+    .btn.primary:hover { background: rgba(255, 255, 255, 0.15); }
 
-    /* =====================================================================
-       Section headings
-       ===================================================================== */
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
+    .last-updated { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .loading-pulse {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--up);
+      box-shadow: 0 0 8px var(--up-glow); margin-right: 8px;
+      animation: pulse 2s infinite;
     }
+    .loading-pulse.loading { background: var(--text-secondary); box-shadow: none; animation: none; }
 
-    .section-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-primary);
-    }
-
-    .section-count {
-      font-size: 12px;
-      color: var(--text-muted);
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      padding: 2px 8px;
-      border-radius: 20px;
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+      100% { opacity: 1; transform: scale(1); }
     }
 
     /* =====================================================================
-       Status Badge
+       Metrics Tiles
        ===================================================================== */
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.4px;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    .badge::before {
-      content: '';
-      display: inline-block;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-    .badge.up       { background: var(--up-bg);       color: var(--up-text);       border: 1px solid var(--up-border); }
-    .badge.down     { background: var(--down-bg);     color: var(--down-text);     border: 1px solid var(--down-border); }
-    .badge.degraded { background: var(--degraded-bg); color: var(--degraded-text); border: 1px solid var(--degraded-border); }
-    .badge.unknown  { background: var(--unknown-bg);  color: var(--unknown-text);  border: 1px solid var(--unknown-border); }
-
-    /* =====================================================================
-       Services Grid
-       ===================================================================== */
-    .services-grid {
+    .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 14px;
-      margin-bottom: 48px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
     }
 
-    .service-card {
-      background: var(--bg-card);
+    .metric-card {
+      background: var(--panel-bg);
       border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 18px 20px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+      border-radius: var(--radius-md);
+      padding: 24px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       position: relative;
       overflow: hidden;
     }
-    .service-card::before {
-      /* Accent line on the left */
-      content: '';
-      position: absolute;
-      left: 0; top: 12px; bottom: 12px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-    }
-    .service-card.up::before    { background: var(--up-text); }
-    .service-card.down::before  { background: var(--down-text); }
-    .service-card.degraded::before { background: var(--degraded-text); }
-    .service-card.unknown::before  { background: var(--unknown-text); }
-
-    .service-card:hover { background: var(--bg-card-hover); transform: translateY(-2px); }
-    .service-card.up:hover     { border-color: var(--up-border);       box-shadow: 0 0 0 1px var(--up-border),    0 8px 24px var(--up-glow); }
-    .service-card.down:hover   { border-color: var(--down-border);     box-shadow: 0 0 0 1px var(--down-border),  0 8px 24px var(--down-glow); }
-    .service-card.degraded:hover { border-color: var(--degraded-border); box-shadow: 0 0 0 1px var(--degraded-border), 0 8px 24px var(--degraded-glow); }
-    .service-card.unknown:hover  { border-color: var(--unknown-border);  box-shadow: 0 0 0 1px var(--unknown-border),  0 8px 24px var(--unknown-glow); }
-
-    .card-top {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      margin-bottom: 10px;
+    .metric-card::before {
+      content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--border-focus), transparent);
+      opacity: 0.5;
     }
 
-    .card-name {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text-primary);
-      word-break: break-all;
-      padding-right: 8px;
-    }
-
-    .card-message {
-      font-size: 12px;
-      color: var(--text-secondary);
-      margin-bottom: 12px;
-      min-height: 18px;
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-
-    .card-footer {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-    }
-
-    /* Empty state */
-    .empty-state {
-      grid-column: 1 / -1;
-      text-align: center;
-      padding: 60px 20px;
-      color: var(--text-muted);
-    }
-    .empty-state-icon { font-size: 36px; margin-bottom: 12px; }
-    .empty-state-text { font-size: 14px; }
+    .metric-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-value { font-size: 32px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; }
+    .metric-sub { font-size: 14px; font-weight: 400; color: var(--text-muted); }
 
     /* =====================================================================
-       Modal (service detail)
+       Services Grid & Cards
        ===================================================================== */
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.65);
-      z-index: 1000;
-      display: flex;
-      align-items: flex-start;
-      justify-content: flex-end;
-      backdrop-filter: blur(4px);
-    }
-    .modal-overlay.hidden { display: none; }
+    .section-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 16px; }
+    .section-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .badge-count { background: var(--panel-bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 20px; font-size: 12px; color: var(--text-secondary); }
 
-    .modal-panel {
-      width: 560px;
-      max-width: 100vw;
-      height: 100vh;
-      background: var(--bg-card);
-      border-left: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      animation: slideIn 0.2s ease;
-      box-shadow: -8px 0 40px rgba(0,0,0,0.5);
-    }
-    @keyframes slideIn {
-      from { transform: translateX(100%); opacity: 0; }
-      to   { transform: translateX(0);   opacity: 1; }
-    }
-
-    .modal-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 20px 24px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-
-    .modal-title-group { display: flex; flex-direction: column; gap: 6px; }
-
-    .modal-title {
-      font-size: 17px;
-      font-weight: 700;
-    }
-
-    .modal-close {
-      width: 32px; height: 32px;
-      display: flex; align-items: center; justify-content: center;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: transparent;
-      color: var(--text-secondary);
-      cursor: pointer;
-      font-size: 16px;
-      flex-shrink: 0;
-      transition: background 0.15s, color 0.15s;
-    }
-    .modal-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
-
-    .modal-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 24px;
-    }
-    .modal-body::-webkit-scrollbar { width: 6px; }
-    .modal-body::-webkit-scrollbar-track { background: transparent; }
-    .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-    /* =====================================================================
-       History Table
-       ===================================================================== */
-    .history-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      margin-bottom: 10px;
-    }
-
-    .table-wrap { overflow-x: auto; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    th {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      text-align: left;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    td {
-      padding: 9px 12px;
-      vertical-align: middle;
-      border-bottom: 1px solid var(--border);
-      color: var(--text-secondary);
-      font-size: 13px;
-    }
-
-    tr:last-child td { border-bottom: none; }
-
-    tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
-    tbody tr:hover { background: rgba(255,255,255,0.04); }
-
-    .ts-cell {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--text-muted);
-      white-space: nowrap;
-    }
-
-    .msg-cell {
-      max-width: 240px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    /* =====================================================================
-       Diagnostics Section
-       ===================================================================== */
-    .diag-controls {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-bottom: 14px;
-    }
-
-    .diag-filter-label {
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-
-    select {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text-primary);
-      border-radius: var(--radius-sm);
-      padding: 6px 10px;
-      font-size: 13px;
-      cursor: pointer;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    select:focus { border-color: var(--border-focus); }
-
-    .diag-list { display: flex; flex-direction: column; gap: 2px; }
-
-    .diag-row {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-      transition: border-color 0.15s;
-    }
-    .diag-row:hover { border-color: var(--border-focus); }
-    .diag-row.expanded { border-color: var(--border-focus); }
-
-    .diag-summary {
-      display: grid;
-      grid-template-columns: 1fr auto auto auto;
-      align-items: center;
-      gap: 12px;
-      padding: 13px 16px;
-      cursor: pointer;
-      user-select: none;
-    }
-
-    .diag-title {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-primary);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .diag-service { font-size: 12px; }
-
-    .diag-ts {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--text-muted);
-      white-space: nowrap;
-    }
-
-    .diag-chevron {
-      color: var(--text-muted);
-      font-size: 12px;
-      transition: transform 0.2s;
-    }
-    .diag-row.expanded .diag-chevron { transform: rotate(180deg); }
-
-    .diag-content-wrap {
-      display: none;
-      padding: 0 16px 16px;
-      border-top: 1px solid var(--border);
-    }
-    .diag-row.expanded .diag-content-wrap { display: block; }
-
-    .diag-content-loading {
-      padding: 16px 0;
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-
-    .diag-content-pre {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 14px;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      color: var(--text-secondary);
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 420px;
-      overflow-y: auto;
-      margin-top: 12px;
-      line-height: 1.7;
-    }
-    .diag-content-pre::-webkit-scrollbar { width: 6px; }
-    .diag-content-pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-    /* =====================================================================
-       Error / Notice banners
-       ===================================================================== */
-    .notice {
-      padding: 10px 14px;
-      border-radius: var(--radius-sm);
-      font-size: 12px;
-      border: 1px solid;
-      margin-bottom: 14px;
-    }
-    .notice.error { background: var(--down-bg); border-color: var(--down-border); color: var(--down-text); }
-
-    /* =====================================================================
-       Responsive
-       ===================================================================== */
-
-    /* Additional UI Styles */
-    .controls-bar { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; align-items: center; justify-content: space-between; }
-    .filter-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; }
     .filter-pill {
-      padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
-      background: var(--bg-input); color: var(--text-secondary); border: 1px solid var(--border);
+      padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
+      background: var(--panel-bg); color: var(--text-secondary); border: 1px solid var(--border);
       transition: all 0.2s;
     }
-    .filter-pill:hover { background: var(--bg-card-hover); color: var(--text-primary); }
-    .filter-pill.active { background: var(--border-focus); color: #fff; border-color: var(--border-focus); }
-    
-    .status-strip-container { display: flex; height: 24px; gap: 2px; margin-top: 12px; border-radius: 4px; overflow: hidden; background: var(--bg-input); }
-    .status-block { flex: 1; min-width: 0; }
-    .status-block.up { background: var(--up-border); }
-    .status-block.down { background: var(--down-border); }
-    .status-block.degraded { background: var(--degraded-border); }
-    .status-block.unknown { background: var(--unknown-border); }
-    
-    .stale-badge { font-size: 14px; margin-left: 6px; cursor: help; }
-    
-    /* Graph */
-    .graph-tabs { display: flex; gap: 10px; margin-bottom: 12px; }
-    .graph-tab { cursor: pointer; padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm); color: var(--text-secondary); }
-    .graph-tab.active { background: var(--bg-input); color: var(--text-primary); font-weight: bold; }
-    
-    .svg-container { position: relative; width: 100%; height: 160px; background: var(--bg-input); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 20px; }
-    .svg-container svg { width: 100%; height: 100%; }
-    .graph-tooltip { position: absolute; background: var(--bg-card); border: 1px solid var(--border); padding: 4px 8px; font-size: 11px; pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10; }
-    
-    .incident-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
-    .incident-item { padding: 10px; background: var(--bg-input); border-left: 3px solid var(--down-border); border-radius: 4px; font-size: 12px; }
-    
-    .maintenance-toggle { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-size: 13px; }
-    
-    /* Tooltip text */
-    [data-tooltip]:hover::after {
-      content: attr(data-tooltip);
-      position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary);
-      padding: 4px 8px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10;
-      margin-bottom: 5px;
+    .filter-pill:hover { background: var(--panel-hover); color: var(--text-primary); }
+    .filter-pill.active { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
+
+    .services-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 20px;
     }
 
-    @media (max-width: 600px) {
-      .header { flex-direction: column; align-items: flex-start; }
-      .modal-panel { width: 100vw; }
-      .diag-summary { grid-template-columns: 1fr auto; }
-      .diag-service, .diag-ts { display: none; }
-      .services-grid { grid-template-columns: 1fr; }
+    .service-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      backdrop-filter: blur(12px);
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: relative;
     }
-    @media (max-width: 900px) {
-      .services-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    
+    .service-card:hover { transform: translateY(-2px); border-color: var(--border-focus); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+    
+    .service-card.up { border-top: 2px solid var(--up); }
+    .service-card.down { border-top: 2px solid var(--down); }
+    .service-card.degraded { border-top: 2px solid var(--degraded); }
+    .service-card.maintenance { border-top: 2px solid var(--maint); }
+    .service-card.unknown { border-top: 2px solid var(--unknown); }
+
+    .service-header { display: flex; justify-content: space-between; align-items: flex-start; }
+    .service-name-group { display: flex; align-items: center; gap: 12px; }
+    .service-name { font-size: 16px; font-weight: 600; color: var(--text-primary); word-break: break-all; }
+    
+    /* Pulsating Status Badge */
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      position: relative;
+    }
+    .status-dot::after {
+      content: ''; position: absolute; top: -4px; left: -4px; right: -4px; bottom: -4px;
+      border-radius: 50%; border: 1px solid currentColor;
+      animation: ripple 2s infinite cubic-bezier(0.15, 0.85, 0.35, 1.2);
+      opacity: 0;
+    }
+    .service-card.up .status-dot { background: var(--up); color: var(--up); box-shadow: 0 0 10px var(--up-glow); }
+    .service-card.down .status-dot { background: var(--down); color: var(--down); box-shadow: 0 0 10px var(--down-glow); }
+    .service-card.degraded .status-dot { background: var(--degraded); color: var(--degraded); box-shadow: 0 0 10px var(--degraded-glow); }
+    .service-card.maintenance .status-dot { background: var(--maint); color: var(--maint); box-shadow: 0 0 10px var(--maint-glow); }
+    .service-card.unknown .status-dot { background: var(--unknown); color: var(--unknown); box-shadow: 0 0 10px var(--unknown-glow); animation: none; }
+    
+    @keyframes ripple {
+      0% { transform: scale(0.8); opacity: 0.5; }
+      100% { transform: scale(2); opacity: 0; }
+    }
+
+    .service-status-text {
+      font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      padding: 2px 8px; border-radius: 4px;
+    }
+    .service-card.up .service-status-text { background: var(--up-bg); color: var(--up); }
+    .service-card.down .service-status-text { background: var(--down-bg); color: var(--down); }
+    .service-card.degraded .service-status-text { background: var(--degraded-bg); color: var(--degraded); }
+    .service-card.maintenance .service-status-text { background: var(--maint-bg); color: var(--maint); }
+    .service-card.unknown .service-status-text { background: var(--unknown-bg); color: var(--unknown); }
+
+    .service-message { font-size: 13px; color: var(--text-secondary); min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .trend-container { display: flex; flex-direction: column; gap: 6px; }
+    .trend-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+    .trend-bar { display: flex; gap: 2px; height: 28px; align-items: flex-end; }
+    .trend-block {
+      flex: 1; min-width: 0; background: var(--panel-hover); border-radius: 2px;
+      transition: height 0.3s ease, background 0.3s ease; height: 100%;
+      cursor: crosshair;
+    }
+    .trend-block:hover { filter: brightness(1.2); }
+    
+    .trend-block.up { background: var(--up); }
+    .trend-block.down { background: var(--down); }
+    .trend-block.degraded { background: var(--degraded); }
+    .trend-block.maintenance { background: var(--maint); }
+    .trend-block.unknown { background: var(--unknown); }
+    .trend-block.empty { background: var(--panel-hover); }
+
+    /* =====================================================================
+       Drawers (Service Detail & Diagnostics)
+       ===================================================================== */
+    .drawer-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px);
+      z-index: 1000; display: flex; justify-content: flex-end;
+      opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+    }
+    .drawer-overlay.open { opacity: 1; pointer-events: auto; }
+
+    .drawer {
+      width: 600px; max-width: 100vw; height: 100vh;
+      background: rgba(13, 16, 23, 0.95); backdrop-filter: blur(20px);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: -10px 0 40px rgba(0,0,0,0.5);
+    }
+    .drawer-overlay.open .drawer { transform: translateX(0); }
+
+    .drawer-header {
+      padding: 24px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(255,255,255,0.02);
+    }
+    .drawer-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 12px; }
+    .drawer-close { background: transparent; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; padding: 4px; }
+    .drawer-close:hover { color: var(--text-primary); }
+
+    .drawer-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
+
+    /* =====================================================================
+       Diagnostic Drawer Specifics
+       ===================================================================== */
+    .diag-run-list { display: flex; flex-direction: column; gap: 12px; }
+    .diag-run-card {
+      background: var(--panel-bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      overflow: hidden; transition: border-color 0.2s;
+    }
+    .diag-run-card:hover { border-color: var(--border-focus); }
+    .diag-run-header {
+      padding: 14px 16px; display: flex; justify-content: space-between; align-items: center;
+      cursor: pointer; user-select: none;
+    }
+    .diag-run-info { display: flex; flex-direction: column; gap: 4px; }
+    .diag-run-title { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+    .diag-run-meta { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+    .diag-run-service { background: var(--panel-hover); padding: 2px 6px; border-radius: 4px; color: var(--text-secondary); font-size: 11px; }
+    
+    .diag-run-body {
+      display: none; border-top: 1px solid var(--border); padding: 16px; background: rgba(0,0,0,0.2);
+      position: relative;
+    }
+    .diag-run-card.open .diag-run-body { display: block; }
+    
+    .diag-copy-btn {
+      position: absolute; top: 16px; right: 16px; padding: 4px 8px; font-size: 11px;
+      background: var(--panel-hover); border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-secondary); cursor: pointer; backdrop-filter: blur(4px);
+    }
+    .diag-copy-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+    
+    .diag-log-block {
+      font-family: var(--font-mono); font-size: 12px; color: #a1a1aa; white-space: pre-wrap;
+      word-break: break-word; max-height: 400px; overflow-y: auto; line-height: 1.6;
+      margin-top: 24px;
+    }
+
+    /* =====================================================================
+       Service Drawer Specifics
+       ===================================================================== */
+    .section-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    
+    .svg-container { position: relative; width: 100%; height: 180px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
+    .svg-container svg { width: 100%; height: 100%; }
+    .graph-tooltip { position: absolute; background: rgba(10, 13, 20, 0.9); border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10; backdrop-filter: blur(4px); white-space: pre;}
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary); }
+    tr:last-child td { border-bottom: none; }
+    .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+    .maint-toggle-wrap { display: flex; align-items: center; justify-content: space-between; background: var(--panel-bg); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+    /* Public Mode Overrides */
+    body.is-public .hide-public { display: none !important; }
+
+    /* Tooltip */
+    [data-tooltip] { position: relative; cursor: help; }
+    [data-tooltip]:hover::after {
+      content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+      background: rgba(10, 13, 20, 0.9); border: 1px solid var(--border); color: var(--text-primary);
+      padding: 6px 10px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10; margin-bottom: 6px;
+      backdrop-filter: blur(4px); font-family: var(--font-sans); font-weight: 400;
     }
   </style>
-
-    <script>
-        const savedTheme = localStorage.getItem('lantern_theme') || 'dark';
-    window.addEventListener('DOMContentLoaded', () => {
-      const ts = document.getElementById('themeSwitcher');
-      if(ts) {
-        ts.value = savedTheme;
-        ts.addEventListener('change', (e) => {
-          const t = e.target.value;
-          document.documentElement.setAttribute('data-theme', t);
-          localStorage.setItem('lantern_theme', t);
-        });
-      }
-    });
-        document.documentElement.setAttribute('data-theme', savedTheme);
-    </script>
-
 </head>
 <body>
-  <div class="app">
-
-    <!-- ================================================================
-         Header
-         ================================================================ -->
+  <div class="app-container">
     <header class="header">
       <div class="header-left">
-        <div>
-          <div class="header-title">🔆 Lantern</div>
-          <div class="header-subtitle">Self-hosted service health dashboard</div>
+        <div class="header-title">
+          <div class="loading-pulse" id="loadingIndicator"></div>
+          Lantern
         </div>
+        <div class="header-subtitle">Service Status & Diagnostics</div>
       </div>
-      <div class="header-meta">
-        <select id="themeSwitcher" class="btn" style="margin-right: 10px;">
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-          <option value="tokyo-night">Tokyo Night</option>
-          <option value="catppuccin">Catppuccin Mocha</option>
-          <option value="nord">Nord</option>
-        </select>
-        <span class="loading-dot" id="loadingDot"></span>
-        <span class="last-updated" id="lastUpdated">Loading…</span>
-        <button class="btn" id="refreshBtn" title="Refresh now">
-          ↻ Refresh
+      <div class="header-right">
+        <span class="last-updated" id="lastUpdated">Updating...</span>
+        <button class="btn hide-public" id="btnDiagnostics">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          Diagnostics
+        </button>
+        <button class="btn" id="btnRefresh">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
         </button>
       </div>
     </header>
 
-    <!-- ================================================================
-         Services Section
-         ================================================================ -->
-    <section>
-      <div class="section-header">
-        <h2 class="section-title">Services</h2>
-        <span class="section-count" id="serviceCount">—</span>
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-title">Overall Uptime</div>
+        <div class="metric-value" id="metricUptime">--%</div>
+        <div class="metric-sub">Last 7 days average</div>
       </div>
-      
-      <div class="controls-bar">
-        <div class="filter-pills" id="serviceFilters">
-          <div class="filter-pill active" data-filter="all">All</div>
-          <div class="filter-pill" data-filter="down">Down</div>
-          <div class="filter-pill" data-filter="degraded">Degraded</div>
-          <div class="filter-pill" data-filter="stale">Stale</div>
-          <div class="filter-pill" data-filter="maintenance">Maintenance</div>
+      <div class="metric-card">
+        <div class="metric-title">Active Incidents</div>
+        <div class="metric-value" id="metricIncidents" style="color: var(--down)">--</div>
+        <div class="metric-sub">Services currently down or degraded</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">System Status</div>
+        <div class="metric-value" id="metricStatus" style="font-size: 24px;">Analyzing...</div>
+        <div class="metric-sub" id="metricStatusSub">Fetching latest service data</div>
+      </div>
+    </div>
+
+    <div class="section-toolbar">
+      <div class="section-title">
+        Services <span class="badge-count" id="serviceCount">0</span>
+      </div>
+      <div class="filters">
+        <div class="filter-pill active" data-filter="all">All</div>
+        <div class="filter-pill" data-filter="down">Down</div>
+        <div class="filter-pill" data-filter="degraded">Degraded</div>
+        <div class="filter-pill hide-public" data-filter="maintenance">Maintenance</div>
+      </div>
+    </div>
+
+    <div class="services-grid" id="servicesGrid">
+      <!-- Injected via JS -->
+    </div>
+  </div>
+
+  <!-- Service Detail Drawer -->
+  <div class="drawer-overlay" id="serviceDrawerOverlay">
+    <div class="drawer" id="serviceDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          <div class="status-dot" id="sdStatusDot"></div>
+          <span id="sdName">Service Name</span>
+          <span class="service-status-text" id="sdStatusBadge">UP</span>
         </div>
-        <select id="sortServices" class="btn">
-          <option value="name">Sort by Name</option>
-          <option value="status">Sort by Status</option>
-          <option value="last_seen">Sort by Last Seen</option>
-        </select>
+        <button class="drawer-close" id="sdClose">✕</button>
       </div>
-      
-      <div id="servicesError"></div>
-      <div class="services-grid" id="servicesGrid">
-        <!-- Cards injected by JS -->
-      </div>
-    </section>
-
-    <!-- ================================================================
-         Diagnostics Section
-         ================================================================ -->
-    <section>
-      <div class="section-header">
-        <h2 class="section-title">Diagnostic Runs</h2>
-        <span class="section-count" id="diagCount">—</span>
-      </div>
-      <div class="diag-controls">
-        <span class="diag-filter-label">Filter by service:</span>
-        <select id="diagFilter">
-          <option value="">All services</option>
-        </select>
-      </div>
-      <div id="diagError"></div>
-      <div class="diag-list" id="diagList">
-        <!-- Rows injected by JS -->
-      </div>
-    </section>
-
-  </div><!-- /.app -->
-
-  <!-- ================================================================
-       Service Detail Modal (slide-in drawer)
-       ================================================================ -->
-  <div class="modal-overlay hidden" id="modalOverlay">
-    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div class="modal-header">
-        <div class="modal-title-group">
-          <span class="modal-title" id="modalTitle">Service</span>
-          <span id="modalBadge"></span>
-        </div>
-        <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="maintenance-toggle">
-          <label>Maintenance Mode:</label>
-          <button id="maintenanceBtn" class="btn">Toggle</button>
-          <span id="maintenanceStatus"></span>
+      <div class="drawer-body">
+        <div class="maint-toggle-wrap hide-public">
+          <div>
+            <div style="font-weight: 500; margin-bottom: 2px;">Maintenance Mode</div>
+            <div style="font-size: 12px; color: var(--text-muted);">Suppress alerts and mark as under maintenance</div>
+          </div>
+          <button class="btn" id="btnToggleMaint">Enable</button>
         </div>
         
-        <div class="history-label">Uptime Graph</div>
-        <div class="graph-tabs" id="graphTabs">
-          <div class="graph-tab active" data-range="24h">24h</div>
-          <div class="graph-tab" data-range="7d">7d</div>
-          <div class="graph-tab" data-range="30d">30d</div>
+        <div>
+          <div class="section-label">Uptime Trend (30 Days)</div>
+          <div class="svg-container">
+            <div class="graph-tooltip" id="graphTooltip"></div>
+            <svg id="uptimeSvg"></svg>
+          </div>
         </div>
-        <div class="svg-container" id="svgContainer">
-          <div class="graph-tooltip" id="graphTooltip"></div>
-          <svg id="uptimeSvg"></svg>
-        </div>
-        
-        <div class="history-label">Incidents</div>
-        <div class="incident-list" id="incidentList">Loading...</div>
 
-        <div class="history-label">Event History</div>
-        <div id="historyError"></div>
-        <div class="table-wrap">
+        <div class="hide-public">
+          <div class="section-label">Recent Incidents</div>
+          <div id="sdIncidents" style="display: flex; flex-direction: column; gap: 8px;">
+            <!-- JS -->
+          </div>
+        </div>
+
+        <div class="hide-public">
+          <div class="section-label">Event History</div>
           <table>
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Status</th>
-                <th>Message</th>
-              </tr>
-            </thead>
-            <tbody id="historyBody">
-              <tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>
-            </tbody>
+            <thead><tr><th>Time</th><th>Status</th><th>Message</th></tr></thead>
+            <tbody id="sdHistoryBody"></tbody>
           </table>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- Diagnostics Drawer -->
+  <div class="drawer-overlay hide-public" id="diagDrawerOverlay">
+    <div class="drawer" id="diagDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-secondary)"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          Diagnostic Runs
+        </div>
+        <button class="drawer-close" id="diagClose">✕</button>
+      </div>
+      <div class="drawer-body" style="padding: 16px;">
+        <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+           <span style="font-size: 13px; color: var(--text-muted)">Filter:</span>
+           <select id="diagFilterSelect" class="btn" style="background: var(--bg); border-color: var(--border);">
+             <option value="">All Services</option>
+           </select>
+        </div>
+        <div class="diag-run-list" id="diagList">
+          <!-- JS -->
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
-    /* ==================================================================
-       Constants & State
-       ================================================================== */
-    const API = {
-      services:    '/api/services',
-      history:     (name) => `/api/services/${encodeURIComponent(name)}/history?limit=50`,
-      diagnostics: '/api/diagnostics',
-      diagnostic:  (id)   => `/api/diagnostics/${id}`,
-    };
+    // Configuration
+    const REFRESH_INTERVAL_MS = 30000;
+    const isPublic = window.location.pathname.endsWith('/status') || new URLSearchParams(window.location.search).get('public') === 'true';
 
-    const REFRESH_INTERVAL_MS = 30_000;
-
-    let state = {
-      services:    [],
+    // State
+    const state = {
+      services: [],
       diagnostics: [],
-      diagFilter:  '',
-      refreshTimer: null,
-      serviceFilter: 'all',
-      serviceSort: 'name',
-      activeModalService: null,
-      graphRange: '24h',
-      strips: {}
+      filter: 'all',
+      strips: {},
+      diagFilter: '',
+      activeService: null,
+      timer: null
     };
-    
-    // Add event listeners for filter and sort
+
+    // APIs
+    const API = {
+      services: isPublic ? '/api/public/services' : '/api/services',
+      history: (name) => `/api/services/${encodeURIComponent(name)}/history?limit=50`,
+      diagnostics: '/api/diagnostics',
+      diagnostic: (id) => `/api/diagnostics/${id}`,
+      strip: (name) => `/api/services/${encodeURIComponent(name)}/strip`,
+      maintenance: (name) => `/api/services/${encodeURIComponent(name)}/maintenance`,
+      uptime: (name) => isPublic ? `/api/public/services/${encodeURIComponent(name)}/uptime?range=30d` : `/api/services/${encodeURIComponent(name)}/uptime?range=30d`,
+      incidents: (name) => `/api/services/${encodeURIComponent(name)}/incidents?range=30d`
+    };
+
+    // Initialization
     document.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('#serviceFilters .filter-pill').forEach(el => {
-        el.addEventListener('click', (e) => {
-          document.querySelectorAll('#serviceFilters .filter-pill').forEach(p => p.classList.remove('active'));
+      if (isPublic) document.body.classList.add('is-public');
+      
+      bindEvents();
+      loadData();
+      state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
+    });
+
+    function bindEvents() {
+      // Filters
+      document.querySelectorAll('.filter-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+          document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
           e.target.classList.add('active');
-          state.serviceFilter = e.target.dataset.filter;
+          state.filter = e.target.dataset.filter;
           renderServices();
         });
       });
-      document.getElementById('sortServices').addEventListener('change', (e) => {
-        state.serviceSort = e.target.value;
-        renderServices();
+
+      // Refresh
+      document.getElementById('btnRefresh').addEventListener('click', () => {
+        clearInterval(state.timer);
+        loadData();
+        state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
       });
-      document.querySelectorAll('.graph-tab').forEach(el => {
-        el.addEventListener('click', (e) => {
-          document.querySelectorAll('.graph-tab').forEach(p => p.classList.remove('active'));
-          e.target.classList.add('active');
-          state.graphRange = e.target.dataset.range;
-          if(state.activeModalService) loadModalData(state.activeModalService);
+
+      // Drawers Close
+      document.getElementById('sdClose').addEventListener('click', () => closeDrawer('serviceDrawerOverlay'));
+      document.getElementById('diagClose').addEventListener('click', () => closeDrawer('diagDrawerOverlay'));
+      document.querySelectorAll('.drawer-overlay').forEach(overlay => {
+        overlay.addEventListener('click', (e) => {
+          if(e.target === overlay) closeDrawer(overlay.id);
         });
       });
-      document.getElementById('maintenanceBtn').addEventListener('click', async () => {
-        if(!state.activeModalService) return;
-        const current = document.getElementById('maintenanceStatus').innerText === 'Enabled';
-        const res = await fetch(`/api/services/${encodeURIComponent(state.activeModalService)}/maintenance`, {
-          method: 'PUT',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({enabled: !current, note: 'Toggled via UI'})
-        });
-        if(res.ok) {
-           const data = await res.json();
-           document.getElementById('maintenanceStatus').innerText = data.enabled ? 'Enabled' : 'Disabled';
-           loadAll(); // refresh data in background
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'Escape') {
+          closeDrawer('serviceDrawerOverlay');
+          closeDrawer('diagDrawerOverlay');
         }
       });
-    });
 
+      // Diagnostics Open
+      if (!isPublic) {
+        document.getElementById('btnDiagnostics').addEventListener('click', () => {
+          openDrawer('diagDrawerOverlay');
+          loadDiagnostics();
+        });
+        
+        document.getElementById('diagFilterSelect').addEventListener('change', (e) => {
+          state.diagFilter = e.target.value;
+          loadDiagnostics();
+        });
 
-    /* ==================================================================
-       Utility helpers
-       ================================================================== */
-
-    /** Return a human-readable relative time string (e.g. "3m ago"). */
-    function relativeTime(isoString) {
-      if (!isoString) return '—';
-      const diffMs = Date.now() - new Date(isoString).getTime();
-      const s = Math.floor(diffMs / 1000);
-      if (s < 5)   return 'just now';
-      if (s < 60)  return `${s}s ago`;
-      const m = Math.floor(s / 60);
-      if (m < 60)  return `${m}m ago`;
-      const h = Math.floor(m / 60);
-      if (h < 24)  return `${h}h ago`;
-      const d = Math.floor(h / 24);
-      return `${d}d ago`;
+        // Maintenance Toggle
+        document.getElementById('btnToggleMaint').addEventListener('click', async () => {
+          if(!state.activeService) return;
+          const btn = document.getElementById('btnToggleMaint');
+          const current = btn.innerText === 'Disable';
+          try {
+            const res = await fetch(API.maintenance(state.activeService), {
+              method: 'PUT',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({enabled: !current, note: 'Toggled via UI'})
+            });
+            if(res.ok) {
+              const data = await res.json();
+              btn.innerText = data.enabled ? 'Disable' : 'Enable';
+              btn.className = data.enabled ? 'btn' : 'btn primary';
+              loadData();
+            }
+          } catch(e) { console.error(e); }
+        });
+      }
     }
 
-    /** Format an ISO datetime string for compact display. */
-    function formatTS(isoString) {
-      if (!isoString) return '—';
-      const d = new Date(isoString);
-      return d.toLocaleString(undefined, {
-        month: '2-digit', day: '2-digit',
-        hour: '2-digit',  minute: '2-digit', second: '2-digit',
-        hour12: false,
+    // Data Loading
+    async function loadData() {
+      const pulse = document.getElementById('loadingIndicator');
+      pulse.classList.remove('loading');
+      try {
+        const res = await fetch(API.services);
+        if (res.ok) {
+          state.services = await res.json();
+          updateMetrics();
+          renderServices();
+          if (!isPublic) updateDiagFilterOptions();
+        }
+      } catch(e) {
+        console.error('Failed to load services', e);
+      } finally {
+        pulse.classList.add('loading');
+        document.getElementById('lastUpdated').innerText = new Date().toLocaleTimeString();
+      }
+    }
+
+    function updateMetrics() {
+      let upCount = 0;
+      let totalUptime7d = 0;
+      let countUptime7d = 0;
+      let activeIncidents = 0;
+
+      state.services.forEach(s => {
+        if (s.status === 'down' || s.status === 'degraded') activeIncidents++;
+        if (s.uptime_7d !== undefined && s.uptime_7d !== null) {
+          totalUptime7d += s.uptime_7d;
+          countUptime7d++;
+        }
       });
-    }
 
-    /** Build a status badge element. */
-    function makeBadge(status) {
-      const span = document.createElement('span');
-      span.className = `badge ${status || 'unknown'}`;
-      span.textContent = status || 'unknown';
-      return span;
-    }
-
-    /** Show a loading dot animation. */
-    function setLoading(active) {
-      document.getElementById('loadingDot').classList.toggle('active', active);
-    }
-
-    /** Render an inline error notice. */
-    function renderError(containerId, msg) {
-      const el = document.getElementById(containerId);
-      if (msg) {
-        el.innerHTML = `<div class="notice error">⚠ ${msg}</div>`;
+      const avgUptime = countUptime7d > 0 ? (totalUptime7d / countUptime7d).toFixed(2) : '--';
+      document.getElementById('metricUptime').innerText = `${avgUptime}%`;
+      document.getElementById('metricIncidents').innerText = activeIncidents;
+      
+      const statEl = document.getElementById('metricStatus');
+      const statSubEl = document.getElementById('metricStatusSub');
+      
+      if (activeIncidents === 0) {
+        statEl.innerText = 'All Systems Operational';
+        statEl.style.color = 'var(--up)';
+        statSubEl.innerText = 'No active incidents detected';
       } else {
-        el.innerHTML = '';
+        statEl.innerText = 'Service Disruption';
+        statEl.style.color = 'var(--down)';
+        statSubEl.innerText = `${activeIncidents} service(s) currently affected`;
       }
     }
-
-    /* ==================================================================
-       Data fetching
-       ================================================================== */
-
-    async function fetchJSON(url) {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-      return res.json();
-    }
-
-    async function loadServices() {
-      try {
-        state.services = await fetchJSON(API.services);
-        renderError('servicesError', '');
-        renderServices();
-        populateDiagFilter();
-      } catch (err) {
-        console.error('loadServices:', err);
-        renderError('servicesError', `Could not load services: ${err.message}`);
-      }
-    }
-
-    async function loadDiagnostics() {
-      const url = state.diagFilter
-        ? `${API.diagnostics}?service_name=${encodeURIComponent(state.diagFilter)}&limit=50`
-        : `${API.diagnostics}?limit=50`;
-      try {
-        state.diagnostics = await fetchJSON(url);
-        renderError('diagError', '');
-        renderDiagnostics();
-      } catch (err) {
-        console.error('loadDiagnostics:', err);
-        renderError('diagError', `Could not load diagnostics: ${err.message}`);
-      }
-    }
-
-    async function loadAll() {
-      setLoading(true);
-      await Promise.all([loadServices(), loadDiagnostics()]);
-      setLoading(false);
-      document.getElementById('lastUpdated').textContent =
-        `Last updated: ${new Date().toLocaleTimeString()}`;
-    }
-
-    /* ==================================================================
-       Services rendering
-       ================================================================== */
 
     function renderServices() {
       const grid = document.getElementById('servicesGrid');
-      const count = document.getElementById('serviceCount');
-      let services = [...(state.services || [])];
+      let filtered = state.services;
       
-      // Filter
-      if(state.serviceFilter !== 'all') {
-         services = services.filter(s => {
-           if(state.serviceFilter === 'down') return s.status === 'down';
-           if(state.serviceFilter === 'degraded') return s.status === 'degraded';
-           if(state.serviceFilter === 'stale') return s.stale;
-           if(state.serviceFilter === 'maintenance') return s.maintenance;
-           return true;
-         });
+      if (state.filter !== 'all') {
+        filtered = filtered.filter(s => {
+          if (state.filter === 'down') return s.status === 'down';
+          if (state.filter === 'degraded') return s.status === 'degraded';
+          if (state.filter === 'maintenance') return s.maintenance;
+          return true;
+        });
       }
-      
-      // Sort
-      services.sort((a, b) => {
-         if(state.serviceSort === 'name') return a.service_name.localeCompare(b.service_name);
-         if(state.serviceSort === 'status') {
-            const map = {down: 0, degraded: 1, up: 2, unknown: 3};
-            const va = map[a.status] ?? 4;
-            const vb = map[b.status] ?? 4;
-            if(va !== vb) return va - vb;
-            return a.service_name.localeCompare(b.service_name);
-         }
-         if(state.serviceSort === 'last_seen') {
-            const ta = new Date(a.last_seen).getTime();
-            const tb = new Date(b.last_seen).getTime();
-            return tb - ta;
-         }
-         return 0;
-      });
 
-      count.textContent = `${services.length} service${services.length !== 1 ? 's' : ''}`;
+      document.getElementById('serviceCount').innerText = filtered.length;
 
-      if (services.length === 0) {
-        grid.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-state-icon">📡</div>
-            <div class="empty-state-text">No services reporting yet (or none match filter).</div>
-          </div>`;
+      if (filtered.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted); background: var(--panel-bg); border-radius: var(--radius-md); border: 1px dashed var(--border);">No services found for current filter.</div>`;
         return;
       }
 
-      grid.innerHTML = '';
-      for (const svc of services) {
-        const card = document.createElement('div');
-        card.className = `service-card ${svc.status || 'unknown'}`;
-        card.setAttribute('role', 'button');
-        card.setAttribute('tabindex', '0');
+      grid.innerHTML = filtered.map(s => {
+        const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
+        const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN');
         
-        let staleHTML = svc.stale ? `<span class="stale-badge" title="Stale: No recent data">⏰</span>` : '';
-        let uptimeHTML = svc.uptime_7d != null ? `<span style="font-size:11px; float:right; color:var(--text-muted);">${svc.uptime_7d}% (7d)</span>` : '';
-        let maintHTML = svc.maintenance ? `<span class="badge unknown" style="margin-left: 5px;">Maint</span>` : '';
-        
-        let stripHTML = `<div class="status-strip-container" id="strip-${svc.service_name}"></div>`;
-        
-        card.innerHTML = `
-          <div class="card-top">
-            <div class="card-name">${escapeHtml(svc.service_name)}${staleHTML}</div>
-            ${uptimeHTML}
+        let trendHTML = '';
+        if (!isPublic) {
+          trendHTML = `
+            <div class="trend-container hide-public">
+               <div class="trend-header">
+                 <span>30-Day History</span>
+                 <span>${s.uptime_30d !== undefined && s.uptime_30d !== null ? s.uptime_30d + '%' : '--%'}</span>
+               </div>
+               <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                  ${Array(30).fill('<div class="trend-block empty"></div>').join('')}
+               </div>
+            </div>
+          `;
+        }
+
+        return `
+          <div class="service-card ${cls}">
+            <div class="service-header">
+              <div class="service-name-group">
+                <div class="status-dot"></div>
+                <div>
+                  <div class="service-name">${escapeHtml(s.service_name)}</div>
+                </div>
+              </div>
+              <div class="service-status-text">${statText}</div>
+            </div>
+            <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
+            ${trendHTML}
+            <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+               <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
+               <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
+            </div>
           </div>
-          <div style="margin-bottom:10px"></div>
-          <div class="card-message">${escapeHtml(svc.message || 'No message')}</div>
-          ${stripHTML}
-          <div class="card-footer" style="margin-top: 10px;">${relativeTime(svc.timestamp)}</div>`;
+        `;
+      }).join('');
 
-        // Insert badge after card-name
-        const cardTop = card.querySelector('.card-top');
-        cardTop.insertBefore(makeBadge(svc.status), cardTop.childNodes[1]);
-        if (svc.maintenance) {
-          cardTop.insertBefore(makeBadge('Maint'), cardTop.childNodes[2]);
-        }
-
-        card.addEventListener('click',  () => openModal(svc));
-        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openModal(svc); });
-
-        grid.appendChild(card);
-        
-        // render strip
-        if(state.strips[svc.service_name]) {
-           renderStrip(svc.service_name, state.strips[svc.service_name]);
-        } else {
-           fetchJSON(`/api/services/${encodeURIComponent(svc.service_name)}/strip`).then(data => {
-              state.strips[svc.service_name] = data.buckets;
-              renderStrip(svc.service_name, data.buckets);
-           }).catch(err => console.error(err));
-        }
-      }
-    }
-    
-    function renderStrip(serviceName, buckets) {
-       const container = document.getElementById(`strip-${serviceName}`);
-       if(!container) return;
-       container.innerHTML = buckets.map(b => `<div class="status-block ${b.status}" title="${new Date(b.start).toLocaleString()} - ${b.status}"></div>`).join('');
-    }
-
-
-    /** Populate the diagnostics filter dropdown with known service names. */
-    function populateDiagFilter() {
-      const sel = document.getElementById('diagFilter');
-      const current = sel.value;
-      // Keep the "All services" option
-      sel.innerHTML = '<option value="">All services</option>';
-      const names = [...new Set(state.services.map(s => s.service_name))].sort();
-      for (const name of names) {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        if (name === current) opt.selected = true;
-        sel.appendChild(opt);
+      // Fetch strips for each if not public
+      if (!isPublic) {
+        filtered.forEach(s => {
+          const safeId = s.service_name.replace(/[^a-zA-Z0-9]/g, '_');
+          if (state.strips[s.service_name]) {
+            renderStrip(safeId, state.strips[s.service_name]);
+          } else {
+            fetch(API.strip(s.service_name)).then(r => r.json()).then(data => {
+              state.strips[s.service_name] = data.buckets;
+              renderStrip(safeId, data.buckets);
+            }).catch(e => console.error(e));
+          }
+        });
       }
     }
 
-    /* ==================================================================
-       Service detail modal
-       ================================================================== */
+    function renderStrip(id, buckets) {
+      const container = document.getElementById(`trend-${id}`);
+      if (!container) return;
+      container.innerHTML = buckets.map(b => {
+         const cls = b.status || 'empty';
+         const date = new Date(b.start).toLocaleDateString();
+         return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
+      }).join('');
+    }
 
-    function openModal(svc) {
-      state.activeModalService = svc.service_name;
-      document.getElementById('modalTitle').textContent = svc.service_name;
-      const badgeEl = document.getElementById('modalBadge');
-      badgeEl.innerHTML = '';
-      badgeEl.appendChild(makeBadge(svc.status));
-      if (svc.maintenance) badgeEl.appendChild(makeBadge('Maint'));
+    // Service Drawer
+    async function openServiceDrawer(name) {
+      state.activeService = name;
+      const svc = state.services.find(s => s.service_name === name);
+      if(!svc) return;
 
-      const overlay = document.getElementById('modalOverlay');
-      overlay.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
+      const cls = svc.maintenance ? 'maintenance' : (svc.status || 'unknown');
+      const statText = svc.maintenance ? 'MAINT' : (svc.status || 'UNKNOWN').toUpperCase();
 
-      // Reset all views
-      document.getElementById('historyBody').innerHTML = `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>`;
-      document.getElementById('incidentList').innerHTML = 'Loading...';
+      document.getElementById('sdName').innerText = name;
+      const badge = document.getElementById('sdStatusBadge');
+      badge.innerText = statText;
+      badge.className = `service-status-text`;
+      document.getElementById('sdStatusDot').parentElement.parentElement.className = `drawer-title service-card ${cls}`; // hacky way to inherit dot color
+
+      // Reset
+      document.getElementById('sdHistoryBody').innerHTML = '<tr><td colspan="3" style="text-align:center">Loading...</td></tr>';
+      document.getElementById('sdIncidents').innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading...</div>';
       document.getElementById('uptimeSvg').innerHTML = '';
-      document.getElementById('maintenanceStatus').innerText = 'Loading...';
-      renderError('historyError', '');
+      const maintBtn = document.getElementById('btnToggleMaint');
+      maintBtn.innerText = '...';
 
-      loadModalData(svc.service_name);
+      openDrawer('serviceDrawerOverlay');
+
+      // Fetch Data
+      if(!isPublic) {
+        fetch(API.maintenance(name)).then(r=>r.json()).then(d => {
+          maintBtn.innerText = d.enabled ? 'Disable' : 'Enable';
+          maintBtn.className = d.enabled ? 'btn' : 'btn primary';
+        }).catch(e=>console.error());
+
+        fetch(API.history(name)).then(r=>r.json()).then(d => {
+          const tbody = document.getElementById('sdHistoryBody');
+          if(!d.events || d.events.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No recent events</td></tr>';
+            return;
+          }
+          tbody.innerHTML = d.events.map(e => `
+            <tr>
+              <td class="ts-cell">${formatTS(e.timestamp)}</td>
+              <td><span class="service-status-text" style="font-size:10px; padding:2px 6px; background:var(--${e.status}-bg); color:var(--${e.status});">${(e.status||'UNK').toUpperCase()}</span></td>
+              <td style="word-break: break-all;">${escapeHtml(e.message)}</td>
+            </tr>
+          `).join('');
+        }).catch(e=>console.error());
+
+        fetch(API.incidents(name)).then(r=>r.json()).then(d => {
+          const list = document.getElementById('sdIncidents');
+          if(!d.incidents || d.incidents.length === 0) {
+            list.innerHTML = '<div style="color:var(--text-muted);font-size:13px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">No incidents in the last 30 days.</div>';
+            return;
+          }
+          list.innerHTML = d.incidents.map(inc => `
+            <div style="background: var(--panel-bg); border-left: 3px solid var(--down); padding: 12px; border-radius: 4px;">
+              <div style="font-weight:500; font-size:13px; margin-bottom:4px;">${escapeHtml(inc.trigger_message)}</div>
+              <div style="font-size:12px; color:var(--text-muted); font-family:var(--font-mono)">
+                ${formatTS(inc.started_at)} — ${inc.ended_at ? formatTS(inc.ended_at) : 'Ongoing'} (${inc.duration_minutes}m)
+              </div>
+            </div>
+          `).join('');
+        }).catch(e=>console.error());
+      }
+
+      // Uptime is available on both public and authenticated
+      fetch(API.uptime(name)).then(r=>r.json()).then(d => {
+         renderGraph(d.datapoints);
+      }).catch(e=>console.error());
     }
-    
-    async function loadModalData(name) {
-       loadHistory(name);
-       
-       // Load Maintenance
-       fetchJSON(`/api/services/${encodeURIComponent(name)}/maintenance`).then(data => {
-          document.getElementById('maintenanceStatus').innerText = data.enabled ? 'Enabled' : 'Disabled';
-       }).catch(err => { document.getElementById('maintenanceStatus').innerText = 'Error'; });
-       
-       // Load Graph
-       fetchJSON(`/api/services/${encodeURIComponent(name)}/uptime?range=${state.graphRange}`).then(data => {
-          renderGraph(data.datapoints);
-       }).catch(err => { document.getElementById('uptimeSvg').innerHTML = ''; });
-       
-       // Load Incidents
-       fetchJSON(`/api/services/${encodeURIComponent(name)}/incidents?range=${state.graphRange}`).then(data => {
-          renderIncidents(data.incidents);
-       }).catch(err => { document.getElementById('incidentList').innerHTML = 'Error loading incidents'; });
-    }
-    
-    function renderIncidents(incidents) {
-       const list = document.getElementById('incidentList');
-       if(!incidents || incidents.length === 0) {
-          list.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">No incidents in this timeframe.</div>';
-          return;
-       }
-       list.innerHTML = incidents.map(inc => `
-          <div class="incident-item">
-             <div><strong>${inc.trigger_status.toUpperCase()}</strong>: ${escapeHtml(inc.trigger_message)}</div>
-             <div style="color:var(--text-muted); margin-top:4px;">${formatTS(inc.started_at)} to ${inc.ended_at ? formatTS(inc.ended_at) : 'Ongoing'} (${inc.duration_minutes}m)</div>
-          </div>
-       `).join('');
-    }
-    
+
     function renderGraph(datapoints) {
        const svg = document.getElementById('uptimeSvg');
        if(!datapoints || datapoints.length === 0) {
            svg.innerHTML = ''; return;
        }
        const w = svg.parentElement.clientWidth || 500;
-       const h = 160;
+       const h = 180;
        svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
        
        const maxVal = 100;
@@ -1122,187 +816,159 @@
        svg.innerHTML = `
          <defs>
            <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-             <stop offset="0%" stop-color="var(--up-border)" stop-opacity="0.4" />
-             <stop offset="100%" stop-color="var(--up-border)" stop-opacity="0" />
+             <stop offset="0%" stop-color="var(--up)" stop-opacity="0.3" />
+             <stop offset="100%" stop-color="var(--up)" stop-opacity="0" />
            </linearGradient>
          </defs>
          <path d="${areaD}" fill="url(#areaGrad)" />
-         <path d="${pathD}" fill="none" stroke="var(--up-border)" stroke-width="2" />
+         <path d="${pathD}" fill="none" stroke="var(--up)" stroke-width="2" />
        `;
        
-       // Add interactive circles
+       // Interactive dots
        const tooltip = document.getElementById('graphTooltip');
        pts.forEach(p => {
           const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
           circle.setAttribute('cx', p.x);
           circle.setAttribute('cy', p.y);
-          circle.setAttribute('r', '4');
-          circle.setAttribute('fill', 'var(--up-border)');
-          circle.style.opacity = '0';
-          circle.style.cursor = 'pointer';
+          circle.setAttribute('r', '6');
+          circle.setAttribute('fill', 'transparent');
+          circle.style.cursor = 'crosshair';
           
           circle.addEventListener('mouseenter', (e) => {
-             circle.style.opacity = '1';
-             tooltip.innerText = `${formatTS(p.dp.timestamp)}
-Uptime: ${p.dp.uptime_pct}%`;
+             tooltip.innerText = `${formatTS(p.dp.timestamp)}\nUptime: ${p.dp.uptime_pct}%`;
              tooltip.style.opacity = '1';
-             tooltip.style.left = `${Math.min(e.offsetX, w - 100)}px`;
-             tooltip.style.top = `${Math.max(e.offsetY - 30, 0)}px`;
+             tooltip.style.left = `${Math.min(e.offsetX, w - 140)}px`;
+             tooltip.style.top = `${Math.max(e.offsetY - 40, 0)}px`;
           });
           circle.addEventListener('mouseleave', () => {
-             circle.style.opacity = '0';
              tooltip.style.opacity = '0';
           });
           svg.appendChild(circle);
        });
     }
 
-
-    function closeModal() {
-      document.getElementById('modalOverlay').classList.add('hidden');
-      document.body.style.overflow = '';
+    // Diagnostics Drawer logic
+    function updateDiagFilterOptions() {
+      const sel = document.getElementById('diagFilterSelect');
+      const current = sel.value;
+      const names = [...new Set(state.services.map(s => s.service_name))].sort();
+      sel.innerHTML = '<option value="">All Services</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+      sel.value = current;
     }
 
-    async function loadHistory(serviceName) {
+    async function loadDiagnostics() {
+      const list = document.getElementById('diagList');
+      list.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">Loading diagnostics...</div>';
+      
+      let url = API.diagnostics + '?limit=50';
+      if(state.diagFilter) url += `&service_name=${encodeURIComponent(state.diagFilter)}`;
+      
       try {
-        const data = await fetchJSON(API.history(serviceName));
-        renderHistory(data.events || []);
-      } catch (err) {
-        console.error('loadHistory:', err);
-        renderError('historyError', `Could not load history: ${err.message}`);
-        document.getElementById('historyBody').innerHTML = '';
-      }
-    }
+        const res = await fetch(url);
+        const data = await res.json();
+        
+        if(!data || data.length === 0) {
+           list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:24px; background:var(--panel-bg); border-radius:6px;">No diagnostic runs found.</div>';
+           return;
+        }
 
-    function renderHistory(events) {
-      const tbody = document.getElementById('historyBody');
-      if (!events.length) {
-        tbody.innerHTML = `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">No events found.</td></tr>`;
-        return;
-      }
-      tbody.innerHTML = events.map(e => `
-        <tr>
-          <td class="ts-cell">${formatTS(e.timestamp)}</td>
-          <td>${makeBadge(e.status).outerHTML}</td>
-          <td class="msg-cell" title="${escapeHtml(e.message || '')}">${escapeHtml(e.message || '—')}</td>
-        </tr>`).join('');
-    }
-
-    // Modal close handlers
-    document.getElementById('modalClose').addEventListener('click', closeModal);
-    document.getElementById('modalOverlay').addEventListener('click', (e) => {
-      if (e.target === document.getElementById('modalOverlay')) closeModal();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeModal();
-    });
-
-    /* ==================================================================
-       Diagnostics rendering
-       ================================================================== */
-
-    function renderDiagnostics() {
-      const list  = document.getElementById('diagList');
-      const count = document.getElementById('diagCount');
-      const runs  = state.diagnostics || [];
-
-      count.textContent = `${runs.length} run${runs.length !== 1 ? 's' : ''}`;
-
-      if (runs.length === 0) {
-        list.innerHTML = `
-          <div class="empty-state" style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg)">
-            <div class="empty-state-icon">🩺</div>
-            <div class="empty-state-text">No diagnostic runs yet.</div>
-          </div>`;
-        return;
-      }
-
-      list.innerHTML = '';
-      for (const run of runs) {
-        const row = document.createElement('div');
-        row.className = 'diag-row';
-        row.dataset.id = run.id;
-
-        row.innerHTML = `
-          <div class="diag-summary">
-            <span class="diag-title">${escapeHtml(run.title)}</span>
-            <span class="diag-service">${makeBadge('unknown').outerHTML.replace('unknown', '').replace('badge unknown', 'badge unknown').replace('<span', '<span').replace('</span>', '</span>')}<span class="badge unknown" style="font-size:10px;padding:2px 8px">${escapeHtml(run.service_name)}</span></span>
-            <span class="diag-ts">${formatTS(run.timestamp)}</span>
-            <span class="diag-chevron">▼</span>
+        list.innerHTML = data.map(run => `
+          <div class="diag-run-card" id="diag-card-${run.id}">
+            <div class="diag-run-header" onclick="toggleDiag('${run.id}')">
+              <div class="diag-run-info">
+                <div class="diag-run-title">${escapeHtml(run.title)}</div>
+                <div class="diag-run-meta">${formatTS(run.timestamp)}</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px;">
+                 <span class="diag-run-service">${escapeHtml(run.service_name)}</span>
+                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" class="chevron" style="transition: transform 0.2s"><path d="M6 9l6 6 6-6"/></svg>
+              </div>
+            </div>
+            <div class="diag-run-body">
+               <button class="diag-copy-btn" onclick="copyDiag('${run.id}', this)">Copy Payload</button>
+               <div class="diag-log-block" id="diag-log-${run.id}">Loading...</div>
+            </div>
           </div>
-          <div class="diag-content-wrap">
-            <div class="diag-content-loading" id="diagContent-${run.id}">Loading…</div>
-          </div>`;
+        `).join('');
 
-        row.querySelector('.diag-summary').addEventListener('click', () => toggleDiag(row, run.id));
-        list.appendChild(row);
+      } catch(e) {
+        list.innerHTML = `<div style="color:var(--down); font-size:13px;">Error loading diagnostics</div>`;
       }
     }
 
     const diagCache = {};
+    async function toggleDiag(id) {
+      const card = document.getElementById(`diag-card-${id}`);
+      const isOpen = card.classList.contains('open');
+      
+      // Close others
+      document.querySelectorAll('.diag-run-card.open').forEach(c => {
+         c.classList.remove('open');
+         c.querySelector('.chevron').style.transform = 'rotate(0deg)';
+      });
 
-    async function toggleDiag(row, id) {
-      const isExpanded = row.classList.contains('expanded');
-      // Collapse all others
-      document.querySelectorAll('.diag-row.expanded').forEach(r => r.classList.remove('expanded'));
+      if(isOpen) return; // closed it
 
-      if (isExpanded) return; // was open, now closed — done.
+      card.classList.add('open');
+      card.querySelector('.chevron').style.transform = 'rotate(180deg)';
+      const logEl = document.getElementById(`diag-log-${id}`);
 
-      row.classList.add('expanded');
-      const contentEl = document.getElementById(`diagContent-${id}`);
-
-      if (diagCache[id]) {
-        renderDiagContent(contentEl, diagCache[id]);
+      if(diagCache[id]) {
+        logEl.textContent = diagCache[id];
         return;
       }
 
-      contentEl.textContent = 'Loading…';
       try {
-        const data = await fetchJSON(API.diagnostic(id));
+        const res = await fetch(API.diagnostic(id));
+        const data = await res.json();
         diagCache[id] = data.content;
-        renderDiagContent(contentEl, data.content);
-      } catch (err) {
-        contentEl.textContent = `Error: ${err.message}`;
+        logEl.textContent = data.content;
+      } catch(e) {
+        logEl.textContent = 'Error loading content';
       }
     }
 
-    function renderDiagContent(el, content) {
-      el.outerHTML; // access before replacement
-      const pre = document.createElement('pre');
-      pre.className = 'diag-content-pre';
-      pre.textContent = content;
-      el.replaceWith(pre);
+    window.copyDiag = function(id, btn) {
+       const text = diagCache[id] || '';
+       navigator.clipboard.writeText(text);
+       const old = btn.innerText;
+       btn.innerText = 'Copied!';
+       setTimeout(() => btn.innerText = old, 2000);
     }
 
-    // Diagnostics filter
-    document.getElementById('diagFilter').addEventListener('change', (e) => {
-      state.diagFilter = e.target.value;
-      loadDiagnostics();
-    });
-
-    /* ==================================================================
-       Auto-refresh
-       ================================================================== */
-
-    function scheduleRefresh() {
-      clearTimeout(state.refreshTimer);
-      state.refreshTimer = setTimeout(async () => {
-        await loadAll();
-        scheduleRefresh();
-      }, REFRESH_INTERVAL_MS);
+    // Utilities
+    function openDrawer(id) {
+      document.getElementById(id).classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeDrawer(id) {
+      document.getElementById(id).classList.remove('open');
+      document.body.style.overflow = '';
     }
 
-    document.getElementById('refreshBtn').addEventListener('click', async () => {
-      clearTimeout(state.refreshTimer);
-      await loadAll();
-      scheduleRefresh();
-    });
+    function relativeTime(iso) {
+      if(!iso) return '—';
+      const d = Date.now() - new Date(iso).getTime();
+      const s = Math.floor(d/1000);
+      if(s<5) return 'just now';
+      if(s<60) return `${s}s ago`;
+      const m = Math.floor(s/60);
+      if(m<60) return `${m}m ago`;
+      const h = Math.floor(m/60);
+      if(h<24) return `${h}h ago`;
+      return `${Math.floor(h/24)}d ago`;
+    }
+    
+    function formatTS(iso) {
+      if(!iso) return '—';
+      return new Date(iso).toLocaleString(undefined, {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+      });
+    }
 
-    /* ==================================================================
-       XSS-safe HTML escaping
-       ================================================================== */
     function escapeHtml(str) {
-      if (!str) return '';
+      if(!str) return '';
       return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -1310,14 +976,6 @@ Uptime: ${p.dp.uptime_pct}%`;
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
-
-    /* ==================================================================
-       Bootstrap
-       ================================================================== */
-    (async () => {
-      await loadAll();
-      scheduleRefresh();
-    })();
   </script>
 </body>
 </html>
