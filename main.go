@@ -53,6 +53,9 @@ func loadConfig() *Config {
 		RetentionDays: getEnvInt("LANTERN_RETENTION_DAYS", 30),
 		AuthUser:      os.Getenv("LANTERN_AUTH_USER"),
 		AuthPass:      os.Getenv("LANTERN_AUTH_PASS"),
+		StaleHours:    getEnvInt("LANTERN_STALE_HOURS", 2),
+		WebhookURL:    os.Getenv("LANTERN_WEBHOOK_URL"),
+		DemoMode:      os.Getenv("LANTERN_DEMO") == "true",
 	}
 	// Auth is enabled implicitly when a username is configured.
 	cfg.AuthEnabled = cfg.AuthUser != ""
@@ -118,6 +121,24 @@ CREATE TABLE IF NOT EXISTS diagnostic_runs (
 
 CREATE INDEX IF NOT EXISTS idx_diag_service
     ON diagnostic_runs(service_name, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS service_maintenance (
+    service_name TEXT PRIMARY KEY,
+    enabled      INTEGER NOT NULL DEFAULT 0,
+    note         TEXT,
+    updated_at   DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_name TEXT NOT NULL,
+    started_at   DATETIME NOT NULL,
+    ended_at     DATETIME,
+    note         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_maint_windows_service
+    ON maintenance_windows(service_name, started_at);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -365,8 +386,8 @@ ORDER BY service_name ASC;`)
 			    s.Maintenance = true
 			}
 			
-			// Mock uptime 7d
-			up := 99.2
+			// Compute real 7-day uptime from status_events
+			up := computeUptime7d(db, s.ServiceName)
 			s.Uptime7d = &up
 
 			services = append(services, s)
