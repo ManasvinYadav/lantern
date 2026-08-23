@@ -5,7 +5,54 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>🔆 Lantern v0.3.0 — Service Dashboard</title>
   <style>
-    /* =====================================================================
+    
+    /* Themes */
+    :root[data-theme="midnight"] {
+      --bg: #000000;
+      --panel-bg: rgba(255,255,255,0.05);
+      --border: rgba(255,255,255,0.15);
+    }
+    :root[data-theme="light"] {
+      --bg: #f8fafc;
+      --panel-bg: #ffffff;
+      --border: #e2e8f0;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #94a3b8;
+    }
+
+    /* List View */
+    .services-grid.list-view {
+      display: flex;
+      flex-direction: column;
+    }
+    .services-grid.list-view .service-card {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      height: auto;
+    }
+    .services-grid.list-view .service-header {
+      width: 25%;
+      margin-bottom: 0;
+    }
+    .services-grid.list-view .service-stats {
+      width: 20%;
+    }
+    .services-grid.list-view .service-sparkline {
+      width: 35%;
+      margin-top: 0;
+      height: 40px;
+    }
+    .services-grid.list-view .service-card::after {
+      display: none;
+    }
+    .services-grid.list-view .hide-public {
+      margin-left: 10px;
+    }
+/* =====================================================================
        CSS Custom Properties & Reset
        ===================================================================== */
     :root {
@@ -103,7 +150,7 @@
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
-      backdrop-filter: blur(8px);
+      
       transition: all 0.2s;
     }
     .btn:hover { background: var(--panel-hover); border-color: var(--border-focus); }
@@ -141,7 +188,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       padding: 24px;
-      backdrop-filter: blur(12px);
+      
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -185,7 +232,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       padding: 20px;
-      backdrop-filter: blur(12px);
+      
       transition: all 0.2s;
       display: flex;
       flex-direction: column;
@@ -260,7 +307,7 @@
        Drawers (Service Detail & Diagnostics)
        ===================================================================== */
     .drawer-overlay {
-      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px);
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); 
       z-index: 1000; display: flex; justify-content: flex-end;
       opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
     }
@@ -268,7 +315,7 @@
 
     .drawer {
       width: 600px; max-width: 100vw; height: 100vh;
-      background: rgba(13, 16, 23, 0.95); backdrop-filter: blur(20px);
+      background: rgba(17, 24, 39, 0.95); 
       border-left: 1px solid var(--border);
       display: flex; flex-direction: column;
       transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -314,7 +361,7 @@
     .diag-copy-btn {
       position: absolute; top: 16px; right: 16px; padding: 4px 8px; font-size: 11px;
       background: var(--panel-hover); border: 1px solid var(--border); border-radius: 4px;
-      color: var(--text-secondary); cursor: pointer; backdrop-filter: blur(4px);
+      color: var(--text-secondary); cursor: pointer; 
     }
     .diag-copy-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
     
@@ -331,7 +378,7 @@
     
     .svg-container { position: relative; width: 100%; height: 180px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
     .svg-container svg { width: 100%; height: 100%; }
-    .graph-tooltip { position: absolute; background: rgba(10, 13, 20, 0.9); border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10; backdrop-filter: blur(4px); white-space: pre;}
+    .graph-tooltip { position: absolute; background: #111827; border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10;  white-space: pre;}
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th { text-align: left; padding: 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
@@ -348,11 +395,16 @@
     [data-tooltip] { position: relative; cursor: help; }
     [data-tooltip]:hover::after {
       content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-      background: rgba(10, 13, 20, 0.9); border: 1px solid var(--border); color: var(--text-primary);
+      background: #111827; border: 1px solid var(--border); color: var(--text-primary);
       padding: 6px 10px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10; margin-bottom: 6px;
-      backdrop-filter: blur(4px); font-family: var(--font-sans); font-weight: 400;
+       font-family: var(--font-sans); font-weight: 400;
     }
   </style>
+
+  <script>
+    const theme = localStorage.getItem('lantern_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  </script>
 </head>
 <body>
   <div class="app-container">
@@ -365,6 +417,16 @@
         <div class="header-subtitle">Service Status & Diagnostics</div>
       </div>
       <div class="header-right">
+        <select id="themeSelector" class="btn" style="padding-right: 8px;">
+          <option value="dark">Theme: Dark</option>
+          <option value="midnight">Theme: Midnight</option>
+          <option value="light">Theme: Light</option>
+        </select>
+        <div class="view-toggle" style="display:flex; gap:2px; background:var(--panel-bg); border-radius:var(--radius-sm); border:1px solid var(--border); padding:2px;">
+          <button id="btnGrid" style="background:var(--panel-hover); border:none; color:var(--text-primary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">Grid</button>
+          <button id="btnList" style="background:transparent; border:none; color:var(--text-secondary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">List</button>
+        </div>
+        <button class="btn hide-public" id="btnIntegrations">Webhooks</button>
         <span class="last-updated" id="lastUpdated">Updating...</span>
         <button class="btn hide-public" id="btnDiagnostics">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -457,8 +519,23 @@
     </div>
   </div>
 
+  
+  <!-- Webhooks Drawer -->
+  <div class="drawer-overlay hide-public hidden" id="webhooksOverlay">
+    <div class="drawer" id="webhooksDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Webhook Integrations</div>
+        <button class="drawer-close" id="webhooksClose">✕</button>
+      </div>
+      <div class="drawer-body" style="padding: 16px;">
+        <div id="webhooksList">Loading...</div>
+        <button class="btn" style="margin-top:16px; width:100%; justify-content:center;" id="btnTestWebhook">Send Test Notification</button>
+        <div id="webhookTestResult" style="margin-top:8px; font-size:12px; color:var(--up); text-align:center;"></div>
+      </div>
+    </div>
+  </div>
   <!-- Diagnostics Drawer -->
-  <div class="drawer-overlay hide-public" id="diagDrawerOverlay">
+  <div class="drawer-overlay hide-public" id="diagDrawerOverlay" class="drawer-overlay hide-public hidden">
     <div class="drawer" id="diagDrawer">
       <div class="drawer-header">
         <div class="drawer-title">
@@ -519,6 +596,74 @@
     });
 
     function bindEvents() {
+
+    // View Toggle
+    const btnGrid = document.getElementById('btnGrid');
+    const btnList = document.getElementById('btnList');
+    const gridEl = document.getElementById('servicesGrid');
+
+    function setView(view) {
+      if (view === 'list') {
+        gridEl.classList.add('list-view');
+        btnList.style.background = 'var(--panel-hover)';
+        btnList.style.color = 'var(--text-primary)';
+        btnGrid.style.background = 'transparent';
+        btnGrid.style.color = 'var(--text-secondary)';
+      } else {
+        gridEl.classList.remove('list-view');
+        btnGrid.style.background = 'var(--panel-hover)';
+        btnGrid.style.color = 'var(--text-primary)';
+        btnList.style.background = 'transparent';
+        btnList.style.color = 'var(--text-secondary)';
+      }
+      localStorage.setItem('lantern_view', view);
+    }
+    btnGrid.addEventListener('click', () => setView('grid'));
+    btnList.addEventListener('click', () => setView('list'));
+    setView(localStorage.getItem('lantern_view') || 'grid');
+
+    // Theme Selector
+    const themeSel = document.getElementById('themeSelector');
+    function setTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('lantern_theme', theme);
+      themeSel.value = theme;
+    }
+    themeSel.addEventListener('change', (e) => setTheme(e.target.value));
+    setTheme(localStorage.getItem('lantern_theme') || 'dark');
+
+    // Integrations logic
+    const webhooksOverlay = document.getElementById('webhooksOverlay');
+    document.getElementById('btnIntegrations').addEventListener('click', async () => {
+      webhooksOverlay.classList.remove('hidden');
+      document.getElementById('webhooksList').innerHTML = 'Loading...';
+      try {
+        const data = await fetchJSON('/api/integrations');
+        let html = '';
+        for (const [name, enabled] of Object.entries(data)) {
+           html += `<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border);">
+             <span style="text-transform:capitalize">${name}</span>
+             <span class="badge ${enabled ? 'up' : 'unknown'}">${enabled ? 'Configured' : 'Not Configured'}</span>
+           </div>`;
+        }
+        document.getElementById('webhooksList').innerHTML = html;
+      } catch (err) {
+        document.getElementById('webhooksList').innerHTML = `Error: ${err.message}`;
+      }
+    });
+    document.getElementById('webhooksClose').addEventListener('click', () => webhooksOverlay.classList.add('hidden'));
+    
+    document.getElementById('btnTestWebhook').addEventListener('click', async () => {
+       try {
+         await fetchJSON('/api/integrations/test', {method: 'POST'});
+         document.getElementById('webhookTestResult').innerText = 'Test notification dispatched!';
+         setTimeout(() => document.getElementById('webhookTestResult').innerText='', 3000);
+       } catch (e) {
+         document.getElementById('webhookTestResult').innerText = 'Failed: ' + e.message;
+       }
+    });
+
+
       // Filters
       document.querySelectorAll('.filter-pill').forEach(pill => {
         pill.addEventListener('click', (e) => {

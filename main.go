@@ -752,6 +752,27 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // setupRoutes builds and returns the application router.
+
+// handleGetIntegrations handles GET /api/integrations.
+func handleGetIntegrations(cfg *Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{
+			"discord":  cfg.WebhookDiscord != "",
+			"telegram": cfg.WebhookTelegram != "",
+			"gotify":   cfg.WebhookGotify != "",
+			"generic":  cfg.WebhookGeneric != "",
+		})
+	}
+}
+
+// handleTestWebhook handles POST /api/integrations/test.
+func handleTestWebhook(cfg *Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		go dispatchWebhooks(cfg, "TestService", "up", "down", "This is a test webhook notification")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "dispatched"})
+	}
+}
+
 func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	r := mux.NewRouter()
 
@@ -760,6 +781,9 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Use(jsonMiddleware)
 
 	api.Handle("/health", handleHealth()).Methods(http.MethodGet)
+	api.Handle("/integrations", handleGetIntegrations(cfg)).Methods(http.MethodGet)
+	api.Handle("/integrations/test", handleTestWebhook(cfg)).Methods(http.MethodPost)
+
 	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
