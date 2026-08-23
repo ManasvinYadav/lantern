@@ -2,7 +2,7 @@
 
 > A lightweight, self-hostable service health dashboard for your homelab. Push status events from any service, view them in a clean dark UI, and store diagnostic runs for post-mortem review.
 
-![🔦 Lantern dashboard — services grid with status badges and diagnostic runs](.github/screenshot.png)
+![🔦 Lantern dashboard — services grid with status badges and diagnostic runs](.github/screenshot-v0.2.0.png)
 
 ---
 
