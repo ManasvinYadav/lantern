@@ -252,15 +252,17 @@ type StatusEventRequest struct {
 // ServiceSummary is a single item returned by GET /api/services.
 
 type ServiceSummary struct {
-	ServiceName string   `json:"service_name"`
-	Status      string   `json:"status"`
-	Message     string   `json:"message"`
-	Timestamp   string   `json:"timestamp"`
-	LastSeen    string   `json:"last_seen"`
-	Stale       bool     `json:"stale"`
-	Maintenance bool     `json:"maintenance"`
-	Uptime7d    *float64 `json:"uptime_7d"`
-	Uptime30d   *float64 `json:"uptime_30d"`
+	ServiceName   string         `json:"service_name"`
+	Status        string         `json:"status"`
+	Message       string         `json:"message"`
+	Timestamp     string         `json:"timestamp"`
+	LastSeen      string         `json:"last_seen"`
+	Stale         bool           `json:"stale"`
+	Maintenance   bool           `json:"maintenance"`
+	Uptime7d      float64        `json:"uptime_7d"`
+	Uptime30d     float64        `json:"uptime_30d"`
+	UptimePercent float64        `json:"uptime_percent"`
+	History       []StatusBucket `json:"history"`
 }
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
@@ -493,9 +495,14 @@ ORDER BY service_name ASC;`)
 
 			// Compute real uptime from status_events
 			up7 := computeUptime7d(db, s.ServiceName)
-			s.Uptime7d = &up7
+			s.Uptime7d = up7
 			up30 := computeUptime30d(db, s.ServiceName)
-			s.Uptime30d = &up30
+			s.Uptime30d = up30
+			s.UptimePercent = up30
+			s.History = computeHistoryBuckets(db, s.ServiceName)
+			if s.History == nil {
+				s.History = make([]StatusBucket, 0)
+			}
 
 			services = append(services, s)
 		}
@@ -768,12 +775,44 @@ func handleGetIntegrations(cfg *Config) http.HandlerFunc {
 	}
 }
 
-// handleTestWebhook handles POST /api/integrations/test.
+// handleTestWebhook handles POST /api/webhooks/test.
 func handleTestWebhook(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		dispatchWebhooks(cfg, "TestService", "up", "down", "This is a test webhook notification")
-		// The prompt requested a specific JSON payload for the test. We'll return it natively.
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "Test webhook dispatched"})
+		var req struct {
+			Channel string `json:"channel"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			req.Channel = "all"
+		}
+		
+		results := make(map[string]map[string]any)
+		testMsg := "🔆 Lantern Test Webhook: Notifications are working correctly!"
+		
+		doTest := func(name, url string, payload any) {
+			if req.Channel != "all" && req.Channel != name {
+				return
+			}
+			if url == "" {
+				results[name] = map[string]any{"attempted": false, "message": "Environment variable not set"}
+				return
+			}
+			
+			body, _ := json.Marshal(payload)
+			resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+			if err != nil {
+				results[name] = map[string]any{"attempted": true, "success": false, "message": err.Error()}
+				return
+			}
+			defer resp.Body.Close()
+			results[name] = map[string]any{"attempted": true, "success": resp.StatusCode < 400, "status_code": resp.StatusCode}
+		}
+
+		doTest("discord", cfg.WebhookDiscord, map[string]string{"content": testMsg})
+		doTest("telegram", cfg.WebhookTelegram, map[string]string{"text": testMsg})
+		doTest("gotify", cfg.WebhookGotify, map[string]string{"title": "Lantern Alert", "message": testMsg})
+		doTest("generic", cfg.WebhookGeneric, map[string]string{"content": testMsg})
+
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "results": results})
 	}
 }
 
@@ -786,7 +825,7 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 
 	api.Handle("/health", handleHealth()).Methods(http.MethodGet)
 	api.Handle("/webhooks", handleGetIntegrations(cfg)).Methods(http.MethodGet)
-	api.Handle("/integrations/test", handleTestWebhook(cfg)).Methods(http.MethodPost)
+	api.Handle("/webhooks/test", handleTestWebhook(cfg)).Methods(http.MethodPost)
 
 	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)

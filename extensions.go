@@ -737,3 +737,90 @@ func computeUptime30d(db *sql.DB, serviceName string) float64 {
 	// Round to 1 decimal place
 	return float64(int(pct*10)) / 10
 }
+
+func computeHistoryBuckets(db *sql.DB, name string) []StatusBucket {
+	since := time.Now().UTC().Add(-720 * time.Hour)
+	now := time.Now().UTC()
+	bucketDur := (720 * time.Hour) / 30
+	numBuckets := 30
+	buckets := make([]StatusBucket, 0, numBuckets)
+
+	events, err := fetchEvents(db, name, since)
+	if err != nil {
+		for i := 0; i < numBuckets; i++ {
+			bStart := since.Add(time.Duration(i) * bucketDur)
+			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
+		}
+		return buckets
+	}
+	prior := fetchLastEventBefore(db, name, since)
+	timeline := buildTimeline(prior, events, since)
+
+	for i := 0; i < numBuckets; i++ {
+		bStart := since.Add(time.Duration(i) * bucketDur)
+		bEnd := bStart.Add(bucketDur)
+		if bEnd.After(now) {
+			bEnd = now
+		}
+		bDur := bEnd.Sub(bStart).Seconds()
+		if bDur <= 0 {
+			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
+			continue
+		}
+
+		statusTime := map[string]float64{}
+		bs := statusAtTime(timeline, bStart)
+		cursor := bStart
+		var nextIdx int
+		for j, seg := range timeline {
+			if seg.start.After(bStart) {
+				nextIdx = j
+				break
+			}
+		}
+		if nextIdx == 0 && (len(timeline) == 0 || timeline[0].start.After(bStart)) {
+			nextIdx = len(timeline)
+		}
+
+		for cursor.Before(bEnd) {
+			var segEnd time.Time
+			if nextIdx < len(timeline) {
+				segEnd = timeline[nextIdx].start
+			} else {
+				segEnd = now
+			}
+			if segEnd.After(bEnd) {
+				segEnd = bEnd
+			}
+			d := segEnd.Sub(cursor).Seconds()
+			if d > 0 {
+				statusTime[bs] += d
+			}
+			cursor = segEnd
+			if nextIdx < len(timeline) {
+				bs = timeline[nextIdx].status
+				nextIdx++
+			} else {
+				break
+			}
+		}
+
+		dom := "unknown"
+		maxT := -1.0
+		for st, t := range statusTime {
+			if t > maxT {
+				maxT = t
+				dom = st
+			}
+		}
+		if maxT <= 0 {
+			dom = "unknown"
+		} else if dom != "up" && isInMaintenance(db, name, bStart) {
+			dom = "maintenance"
+		} else if dom == "degraded" {
+			// keep degraded
+		}
+		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
+	}
+	return buckets
+}

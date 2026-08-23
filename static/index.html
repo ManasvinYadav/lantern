@@ -426,7 +426,7 @@
           <button id="btnGrid" style="background:var(--panel-hover); border:none; color:var(--text-primary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">Grid</button>
           <button id="btnList" style="background:transparent; border:none; color:var(--text-secondary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">List</button>
         </div>
-        <button class="btn hide-public" id="btnIntegrations">Webhooks</button>
+        <button class="btn hide-public" id="webhooks-btn">Webhooks</button>
         <span class="last-updated" id="lastUpdated">Updating...</span>
         <button class="btn hide-public" id="btnDiagnostics">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -520,17 +520,26 @@
   </div>
 
   
-  <!-- Webhooks Drawer -->
-  <div class="drawer-overlay hide-public hidden" id="webhooksOverlay">
-    <div class="drawer" id="webhooksDrawer">
-      <div class="drawer-header">
-        <div class="drawer-title">Webhook Integrations</div>
-        <button class="drawer-close" id="webhooksClose">✕</button>
+  <!-- Webhooks Modal -->
+  <div class="drawer-overlay hide-public hidden" id="webhooks-modal" style="justify-content:center; align-items:center;">
+    <div style="background:var(--panel-bg); width:400px; max-width:90%; border-radius:8px; border:1px solid var(--border); box-shadow:0 10px 30px rgba(0,0,0,0.5); display:flex; flex-direction:column;">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:16px; border-bottom:1px solid var(--border);">
+        <div style="font-weight:600; font-size:16px;">Webhook Integrations</div>
+        <button id="webhooksClose" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:18px;">✕</button>
       </div>
-      <div class="drawer-body" style="padding: 16px;">
+      <div style="padding: 16px;">
         <div id="webhooksList">Loading...</div>
-        <button class="btn" style="margin-top:16px; width:100%; justify-content:center;" id="btnTestWebhook">Send Test Notification</button>
-        <div id="webhookTestResult" style="margin-top:8px; font-size:12px; color:var(--up); text-align:center;"></div>
+        <div style="margin-top: 16px; display:flex; gap: 8px;">
+           <select id="webhookTarget" class="select-input" style="flex:1;">
+              <option value="all">All Channels</option>
+              <option value="discord">Discord</option>
+              <option value="telegram">Telegram</option>
+              <option value="gotify">Gotify</option>
+              <option value="generic">Generic</option>
+           </select>
+           <button class="btn" id="btnTestWebhook">Send Test Webhook</button>
+        </div>
+        <div id="webhookTestResult" style="margin-top:12px; font-size:13px; color:var(--text-secondary); white-space:pre-wrap; max-height: 150px; overflow-y:auto;"></div>
       </div>
     </div>
   </div>
@@ -633,33 +642,68 @@
     setTheme(localStorage.getItem('lantern_theme') || 'dark');
 
     // Integrations logic
-    const webhooksOverlay = document.getElementById('webhooksOverlay');
-    document.getElementById('btnIntegrations').addEventListener('click', async () => {
-      webhooksOverlay.classList.remove('hidden');
-      document.getElementById('webhooksList').innerHTML = 'Loading...';
+    const webhooksModal = document.getElementById('webhooks-modal');
+    
+    function closeWebhooks() {
+        webhooksModal.classList.add('hidden');
+    }
+    
+    document.getElementById('webhooks-btn').addEventListener('click', async () => {
+      webhooksModal.classList.remove('hidden');
+      document.getElementById('webhooksList').innerHTML = '<div style="text-align:center; color:var(--text-muted); font-size:13px;">Loading...</div>';
+      document.getElementById('webhookTestResult').innerHTML = '';
       try {
         const data = await fetchJSON('/api/webhooks');
         let html = '';
         for (const [name, enabled] of Object.entries(data)) {
            html += `<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border);">
              <span style="text-transform:capitalize">${name}</span>
-             <span class="badge ${enabled ? 'up' : 'unknown'}">${enabled ? 'Configured' : 'Not Configured'}</span>
+             <span class="badge ${enabled ? 'up' : 'unknown'}" style="${enabled ? 'background:rgba(46,204,113,0.1); color:#2ecc71;' : ''}">${enabled ? 'Configured' : 'Not Configured'}</span>
            </div>`;
         }
         document.getElementById('webhooksList').innerHTML = html;
       } catch (err) {
-        document.getElementById('webhooksList').innerHTML = `Error: ${err.message}`;
+        document.getElementById('webhooksList').innerHTML = `<div style="color:var(--down)">Error: ${err.message}</div>`;
       }
     });
-    document.getElementById('webhooksClose').addEventListener('click', () => webhooksOverlay.classList.add('hidden'));
+    
+    document.getElementById('webhooksClose').addEventListener('click', closeWebhooks);
+    webhooksModal.addEventListener('click', (e) => {
+        if(e.target === webhooksModal) closeWebhooks();
+    });
+    document.addEventListener('keydown', (e) => {
+        if(e.key === 'Escape') closeWebhooks();
+    });
     
     document.getElementById('btnTestWebhook').addEventListener('click', async () => {
+       const channel = document.getElementById('webhookTarget').value;
+       const resBox = document.getElementById('webhookTestResult');
+       resBox.innerHTML = '<span style="color:var(--text-muted)">Sending...</span>';
        try {
-         await fetchJSON('/api/webhooks/test', {method: 'POST'});
-         document.getElementById('webhookTestResult').innerText = 'Test notification dispatched!';
-         setTimeout(() => document.getElementById('webhookTestResult').innerText='', 3000);
+         const resp = await fetch('/api/webhooks/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({channel})
+         });
+         const data = await resp.json();
+         
+         if(data.status === 'ok') {
+            let out = '';
+            for(const [ch, res] of Object.entries(data.results)) {
+               if(!res.attempted) {
+                  out += `⚠️ ${ch.charAt(0).toUpperCase() + ch.slice(1)}: ${res.message}\n`;
+               } else if(res.success) {
+                  out += `✅ ${ch.charAt(0).toUpperCase() + ch.slice(1)}: Dispatched (HTTP ${res.status_code})\n`;
+               } else {
+                  out += `❌ ${ch.charAt(0).toUpperCase() + ch.slice(1)}: Failed (${res.message || 'HTTP '+res.status_code})\n`;
+               }
+            }
+            resBox.innerHTML = out;
+         } else {
+            resBox.innerHTML = `❌ Error: ${data.message}`;
+         }
        } catch (e) {
-         document.getElementById('webhookTestResult').innerText = 'Failed: ' + e.message;
+         resBox.innerHTML = `<span style="color:var(--down)">Failed: ${e.message}</span>`;
        }
     });
 
@@ -782,6 +826,27 @@
       }
     }
 
+    
+    function buildCardHTML(s, cls, statText, trendHTML) {
+        return `
+            <div class="service-header">
+              <div class="service-name-group">
+                <div class="status-dot"></div>
+                <div>
+                  <div class="service-name">${escapeHtml(s.service_name)}</div>
+                </div>
+              </div>
+              <div class="service-status-text">${statText}</div>
+            </div>
+            <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
+            ${trendHTML}
+            <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+               <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
+               <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
+            </div>
+          `;
+    }
+
     function renderServices() {
       const grid = document.getElementById('servicesGrid');
       let filtered = state.services;
@@ -834,14 +899,25 @@
         
         let trendHTML = '';
         if (!isPublic) {
+          let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
+          if (s.history && Array.isArray(s.history)) {
+              blocks = s.history.map(b => {
+                 const cls = b.status || 'empty';
+                 const date = new Date(b.start).toLocaleDateString();
+                 return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
+              }).join('');
+          }
+          
+          const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
+          
           trendHTML = `
             <div class="trend-container hide-public">
                <div class="trend-header">
                  <span>30-Day History</span>
-                 <span>${s.uptime_30d !== undefined && s.uptime_30d !== null ? s.uptime_30d.toFixed(1) + '%' : '--%'}</span>
+                 <span>${uptimePercent}</span>
                </div>
                <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
-                  ${Array(30).fill('<div class="trend-block empty"></div>').join('')}
+                  ${blocks}
                </div>
             </div>
           `;
@@ -852,19 +928,6 @@
           card.innerHTML = newHTML;
           card.className = 'service-card ' + cls;
           card.dataset.service = s.service_name;
-          const btn = card.querySelector('.btn'); // get details button
-          // Event bound via HTML onclick attribute
-          
-          // Re-trigger strip fetch if not public
-          if (!isPublic) {
-              if (state.strips[s.service_name]) {
-                  renderStrip('trend-'+s.service_name.replace(/[^a-zA-Z0-9]/g, '_'), state.strips[s.service_name]);
-              }
-              fetch(API.strip(s.service_name)).then(r => r.json()).then(data => {
-                  state.strips[s.service_name] = data.buckets;
-                  renderStrip('trend-'+s.service_name.replace(/[^a-zA-Z0-9]/g, '_'), data.buckets);
-              }).catch(e => console.error(e));
-          }
         }
         } catch (err) {
           console.error("Failed to render service:", s.service_name, err);

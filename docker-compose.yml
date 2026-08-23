@@ -13,16 +13,17 @@ services:
       - LANTERN_PORT=7654
       # Data retention period in days (default: 30)
       - LANTERN_RETENTION_DAYS=${LANTERN_RETENTION_DAYS:-30}
-      # Optional basic auth — uncomment and set to enable:
-      # - LANTERN_AUTH_USER=admin
-      # - LANTERN_AUTH_PASS=changeme
+      # API Bearer Token to secure writes/status updates (highly recommended)
+      # - LANTERN_AUTH_TOKEN=your_super_secret_token_here
+      # Path to SQLite DB inside the container
       - LANTERN_DB_PATH=/data/lantern.db
-      # Hours before a service is marked 'stale' if no update received (default: 24)
+      # Hours before a service is marked 'stale' if no heartbeat is received (default: 24)
       - LANTERN_STALE_HOURS=${LANTERN_STALE_HOURS:-24}
-      # Optional Discord/Slack/generic webhook URL for status change alerts:
-      # - LANTERN_WEBHOOK_URL=https://discord.com/api/webhooks/...
-      # Demo mode — seeds fake data if DB is empty (set to 'true' to enable):
-      # - LANTERN_DEMO=false
+      # Webhook URLs for status change alerts (uncomment to enable):
+      # - LANTERN_WEBHOOK_DISCORD=https://discord.com/api/webhooks/...
+      # - LANTERN_WEBHOOK_TELEGRAM=https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
+      # - LANTERN_WEBHOOK_GOTIFY=https://gotify.example.com/message?token=<appToken>
+      # - LANTERN_WEBHOOK_GENERIC=https://your-domain.com/webhook
 
 volumes:
   lantern_data:
