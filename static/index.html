@@ -38,11 +38,11 @@
       width: 25%;
       margin-bottom: 0;
     }
-    .services-grid.list-view .service-stats {
+    .services-grid.list-view .service-message {
       width: 20%;
     }
-    .services-grid.list-view .service-sparkline {
-      width: 35%;
+    .services-grid.list-view .trend-container {
+      width: 35%; align-self: flex-end;
       margin-top: 0;
       height: 40px;
     }
@@ -638,7 +638,7 @@
       webhooksOverlay.classList.remove('hidden');
       document.getElementById('webhooksList').innerHTML = 'Loading...';
       try {
-        const data = await fetchJSON('/api/integrations');
+        const data = await fetchJSON('/api/webhooks');
         let html = '';
         for (const [name, enabled] of Object.entries(data)) {
            html += `<div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border);">
@@ -655,7 +655,7 @@
     
     document.getElementById('btnTestWebhook').addEventListener('click', async () => {
        try {
-         await fetchJSON('/api/integrations/test', {method: 'POST'});
+         await fetchJSON('/api/webhooks/test', {method: 'POST'});
          document.getElementById('webhookTestResult').innerText = 'Test notification dispatched!';
          setTimeout(() => document.getElementById('webhookTestResult').innerText='', 3000);
        } catch (e) {
@@ -801,8 +801,34 @@
         grid.innerHTML = `<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted); background: var(--panel-bg); border-radius: var(--radius-md); border: 1px dashed var(--border);">No services found for current filter.</div>`;
         return;
       }
+      if (grid.children.length === 1 && grid.children[0].tagName === 'DIV' && !grid.children[0].classList.contains('service-card')) {
+          grid.innerHTML = '';
+      }
 
-      grid.innerHTML = filtered.map(s => {
+      const existingCards = Array.from(grid.querySelectorAll('.service-card'));
+      const existingMap = new Map();
+      existingCards.forEach(c => existingMap.set(c.dataset.service, c));
+
+      const filteredNames = new Set(filtered.map(s => s.service_name));
+      for (const [name, node] of existingMap) {
+        if (!filteredNames.has(name)) {
+          node.remove();
+          existingMap.delete(name);
+        }
+      }
+
+      filtered.forEach((s, index) => {
+        try {
+          let card = existingMap.get(s.service_name);
+        if (!card) {
+          card = document.createElement('div');
+          grid.appendChild(card);
+        } else {
+          if (grid.children[index] !== card) {
+             grid.insertBefore(card, grid.children[index]);
+          }
+        }
+        
         const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
         const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN');
         
@@ -812,7 +838,7 @@
             <div class="trend-container hide-public">
                <div class="trend-header">
                  <span>30-Day History</span>
-                 <span>${s.uptime_30d !== undefined && s.uptime_30d !== null ? s.uptime_30d + '%' : '--%'}</span>
+                 <span>${s.uptime_30d !== undefined && s.uptime_30d !== null ? s.uptime_30d.toFixed(1) + '%' : '--%'}</span>
                </div>
                <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
                   ${Array(30).fill('<div class="trend-block empty"></div>').join('')}
@@ -821,42 +847,31 @@
           `;
         }
 
-        return `
-          <div class="service-card ${cls}">
-            <div class="service-header">
-              <div class="service-name-group">
-                <div class="status-dot"></div>
-                <div>
-                  <div class="service-name">${escapeHtml(s.service_name)}</div>
-                </div>
-              </div>
-              <div class="service-status-text">${statText}</div>
-            </div>
-            <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
-            ${trendHTML}
-            <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-               <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
-               <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      // Fetch strips for each if not public
-      if (!isPublic) {
-        filtered.forEach(s => {
-          const safeId = s.service_name.replace(/[^a-zA-Z0-9]/g, '_');
-          if (state.strips[s.service_name]) {
-            renderStrip(safeId, state.strips[s.service_name]);
-          } else {
-            fetch(API.strip(s.service_name)).then(r => r.json()).then(data => {
-              state.strips[s.service_name] = data.buckets;
-              renderStrip(safeId, data.buckets);
-            }).catch(e => console.error(e));
+        const newHTML = buildCardHTML(s, cls, statText, trendHTML);
+        if (card.innerHTML !== newHTML) {
+          card.innerHTML = newHTML;
+          card.className = 'service-card ' + cls;
+          card.dataset.service = s.service_name;
+          const btn = card.querySelector('.btn'); // get details button
+          // Event bound via HTML onclick attribute
+          
+          // Re-trigger strip fetch if not public
+          if (!isPublic) {
+              if (state.strips[s.service_name]) {
+                  renderStrip('trend-'+s.service_name.replace(/[^a-zA-Z0-9]/g, '_'), state.strips[s.service_name]);
+              }
+              fetch(API.strip(s.service_name)).then(r => r.json()).then(data => {
+                  state.strips[s.service_name] = data.buckets;
+                  renderStrip('trend-'+s.service_name.replace(/[^a-zA-Z0-9]/g, '_'), data.buckets);
+              }).catch(e => console.error(e));
           }
-        });
-      }
+        }
+        } catch (err) {
+          console.error("Failed to render service:", s.service_name, err);
+        }
+      });
     }
+
 
     function renderStrip(id, buckets) {
       const container = document.getElementById(`trend-${id}`);

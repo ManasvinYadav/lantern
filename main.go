@@ -260,6 +260,7 @@ type ServiceSummary struct {
 	Stale       bool     `json:"stale"`
 	Maintenance bool     `json:"maintenance"`
 	Uptime7d    *float64 `json:"uptime_7d"`
+	Uptime30d   *float64 `json:"uptime_30d"`
 }
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
@@ -490,9 +491,11 @@ ORDER BY service_name ASC;`)
 				s.Maintenance = true
 			}
 
-			// Compute real 7-day uptime from status_events
-			up := computeUptime7d(db, s.ServiceName)
-			s.Uptime7d = &up
+			// Compute real uptime from status_events
+			up7 := computeUptime7d(db, s.ServiceName)
+			s.Uptime7d = &up7
+			up30 := computeUptime30d(db, s.ServiceName)
+			s.Uptime30d = &up30
 
 			services = append(services, s)
 		}
@@ -768,8 +771,9 @@ func handleGetIntegrations(cfg *Config) http.HandlerFunc {
 // handleTestWebhook handles POST /api/integrations/test.
 func handleTestWebhook(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		go dispatchWebhooks(cfg, "TestService", "up", "down", "This is a test webhook notification")
-		writeJSON(w, http.StatusOK, map[string]string{"status": "dispatched"})
+		dispatchWebhooks(cfg, "TestService", "up", "down", "This is a test webhook notification")
+		// The prompt requested a specific JSON payload for the test. We'll return it natively.
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "message": "Test webhook dispatched"})
 	}
 }
 
@@ -781,7 +785,7 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Use(jsonMiddleware)
 
 	api.Handle("/health", handleHealth()).Methods(http.MethodGet)
-	api.Handle("/integrations", handleGetIntegrations(cfg)).Methods(http.MethodGet)
+	api.Handle("/webhooks", handleGetIntegrations(cfg)).Methods(http.MethodGet)
 	api.Handle("/integrations/test", handleTestWebhook(cfg)).Methods(http.MethodPost)
 
 	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)

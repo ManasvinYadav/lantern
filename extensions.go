@@ -697,3 +697,43 @@ func fireWebhook(cfg *Config, serviceName, prevStatus, newStatus, message string
 		}
 	}()
 }
+
+func computeUptime30d(db *sql.DB, serviceName string) float64 {
+	now := time.Now().UTC()
+	since := now.Add(-30 * 24 * time.Hour)
+
+	events, err := fetchEvents(db, serviceName, since)
+	if err != nil {
+		return 0
+	}
+	prior := fetchLastEventBefore(db, serviceName, since)
+	timeline := buildTimeline(prior, events, since)
+
+	totalSec := now.Sub(since).Seconds()
+	if totalSec <= 0 {
+		return 100
+	}
+
+	var downSec float64
+	for i, s := range timeline {
+		var end time.Time
+		if i+1 < len(timeline) {
+			end = timeline[i+1].start
+		} else {
+			end = now
+		}
+		dur := end.Sub(s.start).Seconds()
+		if dur < 0 {
+			dur = 0
+		}
+		if isDown(s.status) {
+			downSec += dur
+		}
+	}
+	pct := ((totalSec - downSec) / totalSec) * 100
+	if pct < 0 {
+		pct = 0
+	}
+	// Round to 1 decimal place
+	return float64(int(pct*10)) / 10
+}
