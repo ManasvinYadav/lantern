@@ -35,8 +35,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/yourusername/lantern:v0.3.0
-    build: .
+    image: ghcr.io/manasvinyadav/lantern:latest
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -59,25 +58,17 @@ docker compose up -d
 
 Access the dashboard at `http://localhost:7654/`.
 
-## Environment Variables
+## Documentation Suite
 
-| Variable | Default | Description |
-|---|---|---|
-| `LANTERN_PORT` | `7654` | The HTTP port the server listens on. |
-| `LANTERN_DB_PATH` | `lantern.db` | Path to the SQLite database file. |
-| `LANTERN_RETENTION_DAYS` | `30` | Number of days to keep historical status events. |
-| `LANTERN_STALE_HOURS` | `24` | Hours to wait before marking a missing service as stale. |
-| `LANTERN_AUTH_TOKEN` | `(empty)` | Bearer token to secure write actions (POST endpoints). |
-| `LANTERN_WEBHOOK_DISCORD` | `(empty)` | Webhook URL for Discord notifications. |
-| `LANTERN_WEBHOOK_TELEGRAM` | `(empty)` | Webhook URL for Telegram notifications. |
-| `LANTERN_WEBHOOK_GOTIFY` | `(empty)` | Webhook URL for Gotify notifications. |
-| `LANTERN_WEBHOOK_GENERIC` | `(empty)` | Generic JSON Webhook URL. |
+Lantern is highly configurable. Dive into the detailed guides below:
 
-## API Reference
+- 📖 **[API Reference](docs/API.md)**: Full list of endpoints, payloads, and examples.
+- ⚙️ **[Configuration Guide](docs/CONFIG.md)**: Detailed breakdown of all environment variables, auth, and database settings.
+- 🔔 **[Webhooks & Notifications](docs/WEBHOOKS.md)**: Setup guides for Discord, Telegram, Gotify, and generic integrations.
 
-### 1. Heartbeat / Push Status (`POST /api/status`)
+## Quick API Example
 
-Send a status update for a service. Allowed statuses: `up`, `down`, `degraded`.
+Pushing a heartbeat is as simple as a single POST request:
 
 ```bash
 curl -X POST http://localhost:7654/api/status \
@@ -88,39 +79,6 @@ curl -X POST http://localhost:7654/api/status \
     "status": "up",
     "message": "Latency normal"
   }'
-```
-
-### 2. Get Services (`GET /api/services`)
-
-Returns the unified JSON payload for the dashboard, including calculated uptimes and 30-day bucket history.
-
-```bash
-curl http://localhost:7654/api/services
-```
-
-### 3. Toggle Maintenance Mode (`POST /api/status`)
-
-Simply pass `maintenance: true` in your status payload.
-
-```bash
-curl -X POST http://localhost:7654/api/status \
-  -H "Authorization: Bearer your_secret_token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_name": "worker-node",
-    "maintenance": true
-  }'
-```
-
-### 4. Test Webhooks (`POST /api/webhooks/test`)
-
-Dispatch a test notification to verify your integrations.
-
-```bash
-curl -X POST http://localhost:7654/api/webhooks/test \
-  -H "Authorization: Bearer your_secret_token" \
-  -H "Content-Type: application/json" \
-  -d '{"channel": "all"}'
 ```
 
 ## Building from Source
