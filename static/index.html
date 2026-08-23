@@ -552,6 +552,50 @@
     /* =====================================================================
        Responsive
        ===================================================================== */
+
+    /* Additional UI Styles */
+    .controls-bar { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; align-items: center; justify-content: space-between; }
+    .filter-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    .filter-pill {
+      padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
+      background: var(--bg-input); color: var(--text-secondary); border: 1px solid var(--border);
+      transition: all 0.2s;
+    }
+    .filter-pill:hover { background: var(--bg-card-hover); color: var(--text-primary); }
+    .filter-pill.active { background: var(--border-focus); color: #fff; border-color: var(--border-focus); }
+    
+    .status-strip-container { display: flex; height: 24px; gap: 2px; margin-top: 12px; border-radius: 4px; overflow: hidden; background: var(--bg-input); }
+    .status-block { flex: 1; min-width: 0; }
+    .status-block.up { background: var(--up-border); }
+    .status-block.down { background: var(--down-border); }
+    .status-block.degraded { background: var(--degraded-border); }
+    .status-block.unknown { background: var(--unknown-border); }
+    
+    .stale-badge { font-size: 14px; margin-left: 6px; cursor: help; }
+    
+    /* Graph */
+    .graph-tabs { display: flex; gap: 10px; margin-bottom: 12px; }
+    .graph-tab { cursor: pointer; padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm); color: var(--text-secondary); }
+    .graph-tab.active { background: var(--bg-input); color: var(--text-primary); font-weight: bold; }
+    
+    .svg-container { position: relative; width: 100%; height: 160px; background: var(--bg-input); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 20px; }
+    .svg-container svg { width: 100%; height: 100%; }
+    .graph-tooltip { position: absolute; background: var(--bg-card); border: 1px solid var(--border); padding: 4px 8px; font-size: 11px; pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10; }
+    
+    .incident-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+    .incident-item { padding: 10px; background: var(--bg-input); border-left: 3px solid var(--down-border); border-radius: 4px; font-size: 12px; }
+    
+    .maintenance-toggle { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-size: 13px; }
+    
+    /* Tooltip text */
+    [data-tooltip]:hover::after {
+      content: attr(data-tooltip);
+      position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary);
+      padding: 4px 8px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10;
+      margin-bottom: 5px;
+    }
+
     @media (max-width: 600px) {
       .header { flex-direction: column; align-items: flex-start; }
       .modal-panel { width: 100vw; }
@@ -566,6 +610,17 @@
 
     <script>
         const savedTheme = localStorage.getItem('lantern_theme') || 'dark';
+    window.addEventListener('DOMContentLoaded', () => {
+      const ts = document.getElementById('themeSwitcher');
+      if(ts) {
+        ts.value = savedTheme;
+        ts.addEventListener('change', (e) => {
+          const t = e.target.value;
+          document.documentElement.setAttribute('data-theme', t);
+          localStorage.setItem('lantern_theme', t);
+        });
+      }
+    });
         document.documentElement.setAttribute('data-theme', savedTheme);
     </script>
 
@@ -584,6 +639,13 @@
         </div>
       </div>
       <div class="header-meta">
+        <select id="themeSwitcher" class="btn" style="margin-right: 10px;">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="tokyo-night">Tokyo Night</option>
+          <option value="catppuccin">Catppuccin Mocha</option>
+          <option value="nord">Nord</option>
+        </select>
         <span class="loading-dot" id="loadingDot"></span>
         <span class="last-updated" id="lastUpdated">Loading…</span>
         <button class="btn" id="refreshBtn" title="Refresh now">
@@ -600,6 +662,22 @@
         <h2 class="section-title">Services</h2>
         <span class="section-count" id="serviceCount">—</span>
       </div>
+      
+      <div class="controls-bar">
+        <div class="filter-pills" id="serviceFilters">
+          <div class="filter-pill active" data-filter="all">All</div>
+          <div class="filter-pill" data-filter="down">Down</div>
+          <div class="filter-pill" data-filter="degraded">Degraded</div>
+          <div class="filter-pill" data-filter="stale">Stale</div>
+          <div class="filter-pill" data-filter="maintenance">Maintenance</div>
+        </div>
+        <select id="sortServices" class="btn">
+          <option value="name">Sort by Name</option>
+          <option value="status">Sort by Status</option>
+          <option value="last_seen">Sort by Last Seen</option>
+        </select>
+      </div>
+      
       <div id="servicesError"></div>
       <div class="services-grid" id="servicesGrid">
         <!-- Cards injected by JS -->
@@ -641,6 +719,26 @@
         <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
+        <div class="maintenance-toggle">
+          <label>Maintenance Mode:</label>
+          <button id="maintenanceBtn" class="btn">Toggle</button>
+          <span id="maintenanceStatus"></span>
+        </div>
+        
+        <div class="history-label">Uptime Graph</div>
+        <div class="graph-tabs" id="graphTabs">
+          <div class="graph-tab active" data-range="24h">24h</div>
+          <div class="graph-tab" data-range="7d">7d</div>
+          <div class="graph-tab" data-range="30d">30d</div>
+        </div>
+        <div class="svg-container" id="svgContainer">
+          <div class="graph-tooltip" id="graphTooltip"></div>
+          <svg id="uptimeSvg"></svg>
+        </div>
+        
+        <div class="history-label">Incidents</div>
+        <div class="incident-list" id="incidentList">Loading...</div>
+
         <div class="history-label">Event History</div>
         <div id="historyError"></div>
         <div class="table-wrap">
@@ -679,7 +777,51 @@
       diagnostics: [],
       diagFilter:  '',
       refreshTimer: null,
+      serviceFilter: 'all',
+      serviceSort: 'name',
+      activeModalService: null,
+      graphRange: '24h',
+      strips: {}
     };
+    
+    // Add event listeners for filter and sort
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('#serviceFilters .filter-pill').forEach(el => {
+        el.addEventListener('click', (e) => {
+          document.querySelectorAll('#serviceFilters .filter-pill').forEach(p => p.classList.remove('active'));
+          e.target.classList.add('active');
+          state.serviceFilter = e.target.dataset.filter;
+          renderServices();
+        });
+      });
+      document.getElementById('sortServices').addEventListener('change', (e) => {
+        state.serviceSort = e.target.value;
+        renderServices();
+      });
+      document.querySelectorAll('.graph-tab').forEach(el => {
+        el.addEventListener('click', (e) => {
+          document.querySelectorAll('.graph-tab').forEach(p => p.classList.remove('active'));
+          e.target.classList.add('active');
+          state.graphRange = e.target.dataset.range;
+          if(state.activeModalService) loadModalData(state.activeModalService);
+        });
+      });
+      document.getElementById('maintenanceBtn').addEventListener('click', async () => {
+        if(!state.activeModalService) return;
+        const current = document.getElementById('maintenanceStatus').innerText === 'Enabled';
+        const res = await fetch(`/api/services/${encodeURIComponent(state.activeModalService)}/maintenance`, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: !current, note: 'Toggled via UI'})
+        });
+        if(res.ok) {
+           const data = await res.json();
+           document.getElementById('maintenanceStatus').innerText = data.enabled ? 'Enabled' : 'Disabled';
+           loadAll(); // refresh data in background
+        }
+      });
+    });
+
 
     /* ==================================================================
        Utility helpers
@@ -785,7 +927,36 @@
     function renderServices() {
       const grid = document.getElementById('servicesGrid');
       const count = document.getElementById('serviceCount');
-      const services = state.services || [];
+      let services = [...(state.services || [])];
+      
+      // Filter
+      if(state.serviceFilter !== 'all') {
+         services = services.filter(s => {
+           if(state.serviceFilter === 'down') return s.status === 'down';
+           if(state.serviceFilter === 'degraded') return s.status === 'degraded';
+           if(state.serviceFilter === 'stale') return s.stale;
+           if(state.serviceFilter === 'maintenance') return s.maintenance;
+           return true;
+         });
+      }
+      
+      // Sort
+      services.sort((a, b) => {
+         if(state.serviceSort === 'name') return a.service_name.localeCompare(b.service_name);
+         if(state.serviceSort === 'status') {
+            const map = {down: 0, degraded: 1, up: 2, unknown: 3};
+            const va = map[a.status] ?? 4;
+            const vb = map[b.status] ?? 4;
+            if(va !== vb) return va - vb;
+            return a.service_name.localeCompare(b.service_name);
+         }
+         if(state.serviceSort === 'last_seen') {
+            const ta = new Date(a.last_seen).getTime();
+            const tb = new Date(b.last_seen).getTime();
+            return tb - ta;
+         }
+         return 0;
+      });
 
       count.textContent = `${services.length} service${services.length !== 1 ? 's' : ''}`;
 
@@ -793,8 +964,7 @@
         grid.innerHTML = `
           <div class="empty-state">
             <div class="empty-state-icon">📡</div>
-            <div class="empty-state-text">No services reporting yet.<br>
-              Send a POST to <code>/api/status</code> to get started.</div>
+            <div class="empty-state-text">No services reporting yet (or none match filter).</div>
           </div>`;
         return;
       }
@@ -805,26 +975,53 @@
         card.className = `service-card ${svc.status || 'unknown'}`;
         card.setAttribute('role', 'button');
         card.setAttribute('tabindex', '0');
-        card.setAttribute('aria-label', `${svc.service_name}: ${svc.status}`);
-
+        
+        let staleHTML = svc.stale ? `<span class="stale-badge" title="Stale: No recent data">⏰</span>` : '';
+        let uptimeHTML = svc.uptime_7d != null ? `<span style="font-size:11px; float:right; color:var(--text-muted);">${svc.uptime_7d}% (7d)</span>` : '';
+        let maintHTML = svc.maintenance ? `<span class="badge unknown" style="margin-left: 5px;">Maint</span>` : '';
+        
+        let stripHTML = `<div class="status-strip-container" id="strip-${svc.service_name}"></div>`;
+        
         card.innerHTML = `
           <div class="card-top">
-            <div class="card-name">${escapeHtml(svc.service_name)}</div>
+            <div class="card-name">${escapeHtml(svc.service_name)}${staleHTML}</div>
+            ${uptimeHTML}
           </div>
           <div style="margin-bottom:10px"></div>
           <div class="card-message">${escapeHtml(svc.message || 'No message')}</div>
-          <div class="card-footer">${relativeTime(svc.timestamp)}</div>`;
+          ${stripHTML}
+          <div class="card-footer" style="margin-top: 10px;">${relativeTime(svc.timestamp)}</div>`;
 
         // Insert badge after card-name
         const cardTop = card.querySelector('.card-top');
-        cardTop.appendChild(makeBadge(svc.status));
+        cardTop.insertBefore(makeBadge(svc.status), cardTop.childNodes[1]);
+        if (svc.maintenance) {
+          cardTop.insertBefore(makeBadge('Maint'), cardTop.childNodes[2]);
+        }
 
         card.addEventListener('click',  () => openModal(svc));
         card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') openModal(svc); });
 
         grid.appendChild(card);
+        
+        // render strip
+        if(state.strips[svc.service_name]) {
+           renderStrip(svc.service_name, state.strips[svc.service_name]);
+        } else {
+           fetchJSON(`/api/services/${encodeURIComponent(svc.service_name)}/strip`).then(data => {
+              state.strips[svc.service_name] = data.buckets;
+              renderStrip(svc.service_name, data.buckets);
+           }).catch(err => console.error(err));
+        }
       }
     }
+    
+    function renderStrip(serviceName, buckets) {
+       const container = document.getElementById(`strip-${serviceName}`);
+       if(!container) return;
+       container.innerHTML = buckets.map(b => `<div class="status-block ${b.status}" title="${new Date(b.start).toLocaleString()} - ${b.status}"></div>`).join('');
+    }
+
 
     /** Populate the diagnostics filter dropdown with known service names. */
     function populateDiagFilter() {
@@ -847,22 +1044,119 @@
        ================================================================== */
 
     function openModal(svc) {
+      state.activeModalService = svc.service_name;
       document.getElementById('modalTitle').textContent = svc.service_name;
       const badgeEl = document.getElementById('modalBadge');
       badgeEl.innerHTML = '';
       badgeEl.appendChild(makeBadge(svc.status));
+      if (svc.maintenance) badgeEl.appendChild(makeBadge('Maint'));
 
       const overlay = document.getElementById('modalOverlay');
       overlay.classList.remove('hidden');
       document.body.style.overflow = 'hidden';
 
-      // Reset history table
-      document.getElementById('historyBody').innerHTML =
-        `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>`;
+      // Reset all views
+      document.getElementById('historyBody').innerHTML = `<tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:24px">Loading…</td></tr>`;
+      document.getElementById('incidentList').innerHTML = 'Loading...';
+      document.getElementById('uptimeSvg').innerHTML = '';
+      document.getElementById('maintenanceStatus').innerText = 'Loading...';
       renderError('historyError', '');
 
-      loadHistory(svc.service_name);
+      loadModalData(svc.service_name);
     }
+    
+    async function loadModalData(name) {
+       loadHistory(name);
+       
+       // Load Maintenance
+       fetchJSON(`/api/services/${encodeURIComponent(name)}/maintenance`).then(data => {
+          document.getElementById('maintenanceStatus').innerText = data.enabled ? 'Enabled' : 'Disabled';
+       }).catch(err => { document.getElementById('maintenanceStatus').innerText = 'Error'; });
+       
+       // Load Graph
+       fetchJSON(`/api/services/${encodeURIComponent(name)}/uptime?range=${state.graphRange}`).then(data => {
+          renderGraph(data.datapoints);
+       }).catch(err => { document.getElementById('uptimeSvg').innerHTML = ''; });
+       
+       // Load Incidents
+       fetchJSON(`/api/services/${encodeURIComponent(name)}/incidents?range=${state.graphRange}`).then(data => {
+          renderIncidents(data.incidents);
+       }).catch(err => { document.getElementById('incidentList').innerHTML = 'Error loading incidents'; });
+    }
+    
+    function renderIncidents(incidents) {
+       const list = document.getElementById('incidentList');
+       if(!incidents || incidents.length === 0) {
+          list.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">No incidents in this timeframe.</div>';
+          return;
+       }
+       list.innerHTML = incidents.map(inc => `
+          <div class="incident-item">
+             <div><strong>${inc.trigger_status.toUpperCase()}</strong>: ${escapeHtml(inc.trigger_message)}</div>
+             <div style="color:var(--text-muted); margin-top:4px;">${formatTS(inc.started_at)} to ${inc.ended_at ? formatTS(inc.ended_at) : 'Ongoing'} (${inc.duration_minutes}m)</div>
+          </div>
+       `).join('');
+    }
+    
+    function renderGraph(datapoints) {
+       const svg = document.getElementById('uptimeSvg');
+       if(!datapoints || datapoints.length === 0) {
+           svg.innerHTML = ''; return;
+       }
+       const w = svg.parentElement.clientWidth || 500;
+       const h = 160;
+       svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+       
+       const maxVal = 100;
+       const pts = datapoints.map((dp, i) => {
+           const x = (i / (datapoints.length - 1)) * w;
+           const y = h - (dp.uptime_pct / 100 * h);
+           return {x, y, dp};
+       });
+       
+       let pathD = `M ${pts[0].x} ${pts[0].y}`;
+       pts.forEach(p => pathD += ` L ${p.x} ${p.y}`);
+       
+       let areaD = pathD + ` L ${w} ${h} L 0 ${h} Z`;
+       
+       svg.innerHTML = `
+         <defs>
+           <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+             <stop offset="0%" stop-color="var(--up-border)" stop-opacity="0.4" />
+             <stop offset="100%" stop-color="var(--up-border)" stop-opacity="0" />
+           </linearGradient>
+         </defs>
+         <path d="${areaD}" fill="url(#areaGrad)" />
+         <path d="${pathD}" fill="none" stroke="var(--up-border)" stroke-width="2" />
+       `;
+       
+       // Add interactive circles
+       const tooltip = document.getElementById('graphTooltip');
+       pts.forEach(p => {
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', p.x);
+          circle.setAttribute('cy', p.y);
+          circle.setAttribute('r', '4');
+          circle.setAttribute('fill', 'var(--up-border)');
+          circle.style.opacity = '0';
+          circle.style.cursor = 'pointer';
+          
+          circle.addEventListener('mouseenter', (e) => {
+             circle.style.opacity = '1';
+             tooltip.innerText = `${formatTS(p.dp.timestamp)}
+Uptime: ${p.dp.uptime_pct}%`;
+             tooltip.style.opacity = '1';
+             tooltip.style.left = `${Math.min(e.offsetX, w - 100)}px`;
+             tooltip.style.top = `${Math.max(e.offsetY - 30, 0)}px`;
+          });
+          circle.addEventListener('mouseleave', () => {
+             circle.style.opacity = '0';
+             tooltip.style.opacity = '0';
+          });
+          svg.appendChild(circle);
+       });
+    }
+
 
     function closeModal() {
       document.getElementById('modalOverlay').classList.add('hidden');
