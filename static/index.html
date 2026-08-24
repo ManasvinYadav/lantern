@@ -395,13 +395,28 @@
 
     .trend-container { display: flex; flex-direction: column; gap: 6px; }
     .trend-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
-    .trend-bar { display: flex; gap: 2px; height: 28px; align-items: flex-end; }
-    .trend-block {
-      flex: 1; min-width: 0; background: var(--panel-hover); border-radius: 2px;
-      transition: height 0.25s ease, background 0.25s ease; height: 100%;
-      cursor: crosshair;
+    .trend-bar {
+      display: flex;
+      gap: 0;
+      height: 28px;
+      align-items: stretch;
+      width: 100%;
+      border-radius: 3px;
+      overflow: hidden;
+      background: var(--panel-hover);
     }
-    .trend-block:hover { filter: brightness(1.2); }
+    .trend-block {
+      flex: 1 1 0;
+      min-width: 0;
+      height: 100%;
+      cursor: crosshair;
+      transition: filter 0.15s ease;
+    }
+    .trend-block:hover {
+      filter: brightness(1.5);
+      position: relative;
+      z-index: 2;
+    }
     
     .trend-block.up { background: var(--up); }
     .trend-block.down { background: var(--down); }
@@ -1928,19 +1943,21 @@
 
             let trendHTML = '';
             if (!isPublic) {
-              let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
+              let blocks = Array(720).fill('<div class="trend-block empty"></div>').join('');
               if (s.history && Array.isArray(s.history)) {
                 blocks = s.history.map(b => {
                   const bcls = b.status || 'empty';
-                  const date = new Date(b.start).toLocaleDateString();
-                  return `<div class="trend-block ${bcls}" data-tooltip="${date} - ${bcls.toUpperCase()}"></div>`;
+                  const d = new Date(b.start);
+                  const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                  const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                  return `<div class="trend-block ${bcls}" data-tooltip="${dateStr} ${timeStr} - ${bcls.toUpperCase()}"></div>`;
                 }).join('');
               }
               const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
               trendHTML = `
                 <div class="trend-container hide-public">
                    <div class="trend-header">
-                     <span>30-Day History</span>
+                     <span>30-Day / Hourly History</span>
                      <span class="uptime-pct-label">${uptimePercent}</span>
                    </div>
                    <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
@@ -1984,6 +2001,36 @@
               }
             } else if (groupWrap) {
               groupWrap.remove();
+            }
+
+            const uptimeEl = card.querySelector('.uptime-pct-label');
+            const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
+            if (uptimeEl && uptimeEl.innerText !== uptimePercent) uptimeEl.innerText = uptimePercent;
+
+            const trendBar = card.querySelector('.trend-bar');
+            if (trendBar && s.history && Array.isArray(s.history)) {
+              if (trendBar.children.length !== s.history.length) {
+                trendBar.innerHTML = s.history.map(b => {
+                  const bcls = b.status || 'empty';
+                  const d = new Date(b.start);
+                  const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                  const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                  return `<div class="trend-block ${bcls}" data-tooltip="${dateStr} ${timeStr} - ${bcls.toUpperCase()}"></div>`;
+                }).join('');
+              } else {
+                s.history.forEach((b, bi) => {
+                  const block = trendBar.children[bi];
+                  if (!block) return;
+                  const bcls = b.status || 'empty';
+                  if (!block.classList.contains(bcls)) {
+                    block.className = `trend-block ${bcls}`;
+                    const d = new Date(b.start);
+                    const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                    const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+                    block.dataset.tooltip = `${dateStr} ${timeStr} - ${bcls.toUpperCase()}`;
+                  }
+                });
+              }
             }
 
             if (grid.children[index] !== card) {
