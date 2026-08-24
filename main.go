@@ -21,7 +21,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -162,6 +162,12 @@ CREATE TABLE IF NOT EXISTS webhook_configs (
     url        TEXT NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS service_groups (
+    service_name TEXT PRIMARY KEY,
+    group_name   TEXT NOT NULL DEFAULT '',
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -260,6 +266,7 @@ type StatusEventRequest struct {
 	Status      string `json:"status"`
 	Message     string `json:"message"`
 	Timestamp   string `json:"timestamp"` // RFC 3339; optional, defaults to now
+	GroupName   string `json:"group_name,omitempty"`
 }
 
 // ServiceSummary is a single item returned by GET /api/services.
@@ -272,6 +279,7 @@ type ServiceSummary struct {
 	LastSeen      string         `json:"last_seen"`
 	Stale         bool           `json:"stale"`
 	Maintenance   bool           `json:"maintenance"`
+	GroupName     string         `json:"group_name"`
 	Uptime7d      float64        `json:"uptime_7d"`
 	Uptime30d     float64        `json:"uptime_30d"`
 	UptimePercent float64        `json:"uptime_percent"`
@@ -487,6 +495,12 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 
 		id, _ := result.LastInsertId()
 
+		if req.GroupName != "" {
+			_, _ = db.Exec(`INSERT INTO service_groups (service_name, group_name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+				ON CONFLICT(service_name) DO UPDATE SET group_name = excluded.group_name, updated_at = CURRENT_TIMESTAMP`,
+				req.ServiceName, strings.TrimSpace(req.GroupName))
+		}
+
 		var maint int
 		db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", req.ServiceName).Scan(&maint)
 		if maint == 0 && lastStatus != "" && lastStatus != req.Status {
@@ -502,12 +516,13 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 func handleGetServices(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`
-SELECT service_name, status, message, timestamp
-FROM status_events
-WHERE id IN (
+SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, '')
+FROM status_events s
+LEFT JOIN service_groups g ON s.service_name = g.service_name
+WHERE s.id IN (
     SELECT MAX(id) FROM status_events GROUP BY service_name
 )
-ORDER BY service_name ASC;`)
+ORDER BY s.service_name ASC;`)
 		if err != nil {
 			log.Printf("handleGetServices db error: %v", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -520,7 +535,7 @@ ORDER BY service_name ASC;`)
 		for rows.Next() {
 			var s ServiceSummary
 			var msg sql.NullString
-			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp); err != nil {
+			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName); err != nil {
 				continue
 			}
 			if msg.Valid {
@@ -787,6 +802,13 @@ type spaHandler struct {
 }
 
 func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "API endpoint not found"})
+		return
+	}
+
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
@@ -926,6 +948,90 @@ func handleTestWebhook(db *sql.DB, cfg *Config) http.HandlerFunc {
 	}
 }
 
+// GroupSummary represents a service group and the number of services in it.
+type GroupSummary struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// handleGetGroups handles GET /api/groups.
+func handleGetGroups(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query(`
+			SELECT COALESCE(g.group_name, ''), COUNT(DISTINCT s.service_name)
+			FROM status_events s
+			LEFT JOIN service_groups g ON s.service_name = g.service_name
+			WHERE s.id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
+			GROUP BY COALESCE(g.group_name, '')
+			ORDER BY COALESCE(g.group_name, '') ASC;
+		`)
+		if err != nil {
+			log.Printf("handleGetGroups db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		groups := []GroupSummary{}
+		for rows.Next() {
+			var g GroupSummary
+			if err := rows.Scan(&g.Name, &g.Count); err != nil {
+				continue
+			}
+			if g.Name != "" {
+				groups = append(groups, g)
+			}
+		}
+		writeJSON(w, http.StatusOK, groups)
+	}
+}
+
+// handlePutServiceGroup handles PUT /api/services/{name}/group.
+func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		name := strings.TrimSpace(vars["name"])
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "service name is required")
+			return
+		}
+
+		scopedSvc := r.Context().Value("scoped_service")
+		if scopedSvc != nil && scopedSvc.(string) != name {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
+		var req struct {
+			Group     string `json:"group"`
+			GroupName string `json:"group_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		group := strings.TrimSpace(req.Group)
+		if group == "" {
+			group = strings.TrimSpace(req.GroupName)
+		}
+
+		_, err := db.Exec(`INSERT INTO service_groups (service_name, group_name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(service_name) DO UPDATE SET group_name = excluded.group_name, updated_at = CURRENT_TIMESTAMP`,
+			name, group)
+		if err != nil {
+			log.Printf("handlePutServiceGroup db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":       "ok",
+			"service_name": name,
+			"group_name":   group,
+		})
+	}
+}
+
 func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	r := mux.NewRouter()
 
@@ -937,10 +1043,16 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Handle("/webhooks", handleGetWebhooks(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/webhooks", handlePutWebhooks(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
+	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 
 	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/group", handlePutServiceGroup(db)).Methods(http.MethodPut, http.MethodPost)
+	api.Handle("/services/{name}/metadata", handleGetServiceMetadata(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/docker/status", handleGetDockerStatus()).Methods(http.MethodGet)
+	api.Handle("/services/{name}/docker/restart", handlePostDockerRestart(db)).Methods(http.MethodPost)
+	api.Handle("/services/{name}/docker/logs", handleGetDockerLogs()).Methods(http.MethodGet)
 	api.Handle("/diagnostics", handlePostDiagnostics(db)).Methods(http.MethodPost)
 	api.Handle("/diagnostics", handleGetDiagnostics(db)).Methods(http.MethodGet)
 	api.Handle("/diagnostics/{id}", handleGetDiagnosticByID(db)).Methods(http.MethodGet)
@@ -955,6 +1067,8 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	publicApi := r.PathPrefix("/api/public").Subrouter()
 	publicApi.Use(jsonMiddleware)
 	publicApi.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
+	publicApi.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
+	publicApi.Handle("/services/{name}/metadata", handleGetServiceMetadata(db)).Methods(http.MethodGet)
 	publicApi.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
 
 	// --- Static / SPA ---

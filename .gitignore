@@ -22,3 +22,5 @@ Thumbs.db
 
 # Docker
 .env
+
+.agents/

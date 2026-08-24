@@ -8,6 +8,7 @@ services:
       - "${LANTERN_PORT:-7654}:7654"
     volumes:
       - lantern_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       # Port the service listens on inside the container
       - LANTERN_PORT=7654

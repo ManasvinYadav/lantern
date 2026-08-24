@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔆 Lantern v0.3.0 — Service Dashboard</title>
+  <title>🔆 Lantern v0.4.0 — Service Dashboard</title>
   <style>
     
     /* Themes */
@@ -621,6 +621,169 @@
       background: var(--panel-hover);
       color: var(--text-muted);
     }
+
+    /* Search Box */
+    .search-box-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 220px;
+    }
+    .search-box-wrap svg {
+      position: absolute;
+      left: 10px;
+      pointer-events: none;
+    }
+    .search-input {
+      width: 100%;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 30px 6px 32px;
+      font-size: 12px;
+      color: var(--text-primary);
+      outline: none;
+      transition: all 0.2s;
+    }
+    .search-input:focus {
+      border-color: var(--accent);
+      background: var(--bg);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    .search-clear-btn {
+      position: absolute;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 2px 4px;
+    }
+    .search-clear-btn:hover { color: var(--text-primary); }
+
+    /* Service Group Badge */
+    .service-group-badge {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--panel-hover);
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+
+    /* Toast Notifications */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto;
+      background: rgba(17, 24, 39, 0.95);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      transform: translateY(20px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    .toast.success { border-left: 3px solid var(--accent); }
+    .toast.error { border-left: 3px solid var(--down); }
+    .toast.warning { border-left: 3px solid var(--degraded); }
+    .toast.info { border-left: 3px solid #3b82f6; }
+    :root[data-theme="light"] .toast {
+      background: #ffffff;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    }
+
+    /* Skeletons & Empty State */
+    .skeleton-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .skeleton-box {
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+      animation: shimmer 1.5s infinite;
+    }
+    :root[data-theme="light"] .skeleton-box {
+      background: rgba(0,0,0,0.06);
+    }
+    @keyframes shimmer {
+      0% { opacity: 0.3; }
+      50% { opacity: 0.8; }
+      100% { opacity: 0.3; }
+    }
+    .empty-state {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      background: var(--panel-bg);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+      text-align: center;
+      gap: 12px;
+    }
+    .empty-state-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+    .empty-state-sub { font-size: 13px; color: var(--text-muted); max-width: 400px; }
+
+    /* Metadata Table Grid */
+    .meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 10px;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    :root[data-theme="light"] .meta-item {
+      background: #f8fafc;
+    }
+    .meta-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+    .meta-val {
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+      word-break: break-all;
+    }
   </style>
 
   <script>
@@ -686,14 +849,28 @@
     </div>
 
     <div class="section-toolbar">
-      <div class="section-title">
-        Services <span class="badge-count" id="serviceCount">0</span>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div class="section-title">
+          Services <span class="badge-count" id="serviceCount">0</span>
+        </div>
+        <div class="search-box-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="serviceSearchInput" class="search-input" placeholder="Search services..." />
+          <button id="searchClearBtn" class="search-clear-btn" style="display:none;">✕</button>
+        </div>
       </div>
-      <div class="filters">
-        <div class="filter-pill active" data-filter="all">All</div>
-        <div class="filter-pill" data-filter="down">Down</div>
-        <div class="filter-pill" data-filter="degraded">Degraded</div>
-        <div class="filter-pill hide-public" data-filter="maintenance">Maintenance</div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div class="filters" id="statusFilters">
+          <div class="filter-pill active" data-filter="all">All</div>
+          <div class="filter-pill" data-filter="down">Down</div>
+          <div class="filter-pill" data-filter="degraded">Degraded</div>
+          <div class="filter-pill hide-public" data-filter="maintenance">Maintenance</div>
+        </div>
+        <div class="group-filter-wrap">
+          <select id="groupFilterSelect" class="btn" style="font-size:12px; padding:5px 10px; cursor:pointer; outline:none;">
+            <option value="">All Groups</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -714,6 +891,19 @@
         <button class="drawer-close" id="sdClose">✕</button>
       </div>
       <div class="drawer-body">
+        <!-- Service Group Assignment (Admin) -->
+        <div class="sd-group-section hide-public" style="display:flex; justify-content:space-between; align-items:center; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px 16px;">
+          <div>
+            <div style="font-size:13px; font-weight:500;">Service Group</div>
+            <div style="font-size:11px; color:var(--text-muted);">Organize services into stacks (e.g. media, networking)</div>
+          </div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input type="text" id="sdGroupInput" class="form-input" style="width:130px; padding:4px 8px; font-size:12px;" placeholder="e.g. media, net" />
+            <button class="btn" id="btnSaveGroup" style="padding:4px 10px; font-size:12px;">Save</button>
+          </div>
+        </div>
+
+        <!-- Maintenance Mode Toggle -->
         <div class="maint-toggle-wrap hide-public">
           <div>
             <div style="font-weight: 500; margin-bottom: 2px;">Maintenance Mode</div>
@@ -721,7 +911,43 @@
           </div>
           <button class="btn" id="btnToggleMaint">Enable</button>
         </div>
-        
+
+        <!-- Docker Management & Logs (Admin) -->
+        <div id="sdDockerSection" class="hide-public" style="display:none; flex-direction:column; gap:12px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              <span style="font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Docker Control</span>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn" id="btnDockerRestart" style="font-size:12px; padding:4px 10px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                Restart Container
+              </button>
+              <button class="btn" id="btnToggleDockerLogs" style="font-size:12px; padding:4px 10px;">View Logs</button>
+            </div>
+          </div>
+          <div id="sdDockerInfo" style="font-size:12px; color:var(--text-secondary); display:flex; gap:16px; flex-wrap:wrap; font-family:var(--font-mono);">
+            <!-- JS Injected -->
+          </div>
+          <div id="sdDockerLogsWrap" style="display:none; flex-direction:column; gap:8px; margin-top:6px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:11px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Live Logs (Tail)</div>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <select id="sdDockerLogTail" class="btn" style="padding:2px 6px; font-size:11px;">
+                  <option value="50">50 lines</option>
+                  <option value="100" selected>100 lines</option>
+                  <option value="250">250 lines</option>
+                </select>
+                <button class="btn" id="btnRefreshDockerLogs" style="padding:2px 6px; font-size:11px;">Refresh</button>
+                <button class="btn" id="btnCopyDockerLogs" style="padding:2px 6px; font-size:11px;">Copy</button>
+              </div>
+            </div>
+            <pre id="sdDockerLogsPre" style="font-family:var(--font-mono); font-size:11px; color:#94a3b8; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; max-height:260px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></pre>
+          </div>
+        </div>
+
+        <!-- Uptime Trend Graph -->
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <div class="section-label" id="uptimeSectionLabel" style="margin-bottom: 0;">Uptime Trend (30 Days)</div>
@@ -738,6 +964,15 @@
           </div>
         </div>
 
+        <!-- Service & Container Metadata Inspector -->
+        <div>
+          <div class="section-label">Service & Container Metadata</div>
+          <div id="sdMetadataBody" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+            <!-- JS Injected: Port mappings, Image, IP, Network, Created, Total Checks -->
+          </div>
+        </div>
+
+        <!-- Recent Incidents -->
         <div class="hide-public">
           <div class="section-label">Recent Incidents</div>
           <div id="sdIncidents" style="display: flex; flex-direction: column; gap: 8px;">
@@ -745,6 +980,7 @@
           </div>
         </div>
 
+        <!-- Event History -->
         <div class="hide-public">
           <div class="section-label">Event History</div>
           <table>
@@ -885,6 +1121,8 @@
     </div>
   </div>
 
+  <div id="toastContainer" class="toast-container"></div>
+
   <script>
     // Configuration
     const REFRESH_INTERVAL_MS = 30000;
@@ -893,58 +1131,367 @@
     // State
     const state = {
       services: [],
+      groups: [],
       diagnostics: [],
       filter: 'all',
+      groupFilter: '',
+      searchQuery: '',
       strips: {},
       diagFilter: '',
       activeService: null,
       uptimeRange: '30d',
+      lastUptimeDatapoints: null,
       timer: null
     };
 
     // APIs
     const API = {
       services: isPublic ? '/api/public/services' : '/api/services',
+      groups: isPublic ? '/api/public/groups' : '/api/groups',
+      group: (name) => `/api/services/${encodeURIComponent(name)}/group`,
       history: (name) => `/api/services/${encodeURIComponent(name)}/history?limit=50`,
       diagnostics: '/api/diagnostics',
       diagnostic: (id) => `/api/diagnostics/${id}`,
       strip: (name) => `/api/services/${encodeURIComponent(name)}/strip`,
       maintenance: (name) => `/api/services/${encodeURIComponent(name)}/maintenance`,
       uptime: (name, range = '30d') => isPublic ? `/api/public/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}` : `/api/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}`,
-      incidents: (name) => `/api/services/${encodeURIComponent(name)}/incidents?range=30d`
+      incidents: (name) => `/api/services/${encodeURIComponent(name)}/incidents?range=30d`,
+      metadata: (name) => isPublic ? `/api/public/services/${encodeURIComponent(name)}/metadata` : `/api/services/${encodeURIComponent(name)}/metadata`,
+      dockerStatus: (name) => `/api/services/${encodeURIComponent(name)}/docker/status`,
+      dockerRestart: (name) => `/api/services/${encodeURIComponent(name)}/docker/restart`,
+      dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`
     };
+
+    // Toast System
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      let icon = 'ℹ️';
+      if (type === 'success') icon = '✓';
+      if (type === 'error') icon = '✕';
+      if (type === 'warning') icon = '⚠️';
+      toast.innerHTML = `<span style="font-size:14px; font-weight:700;">${icon}</span> <span>${escapeHtml(message)}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.classList.add('show'), 10);
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+      }, 3200);
+    }
 
     // Initialization
     document.addEventListener('DOMContentLoaded', () => {
       if (isPublic) document.body.classList.add('is-public');
       
       bindEvents();
+      renderSkeletons();
       loadData();
       state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
     });
 
-    function bindEvents() {
-
-    // View Toggle
-    const btnGrid = document.getElementById('btnGrid');
-    const btnList = document.getElementById('btnList');
-    const gridEl = document.getElementById('servicesGrid');
-
-    function setView(view) {
-      if (view === 'list') {
-        gridEl.classList.add('list-view');
-        btnList.classList.add('active');
-        btnGrid.classList.remove('active');
-      } else {
-        gridEl.classList.remove('list-view');
-        btnGrid.classList.add('active');
-        btnList.classList.remove('active');
-      }
-      localStorage.setItem('lantern_view', view);
+    function renderSkeletons() {
+      const grid = document.getElementById('servicesGrid');
+      if (!grid || (state.services && state.services.length > 0)) return;
+      grid.innerHTML = Array(6).fill(0).map(() => `
+        <div class="skeleton-card">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="skeleton-box" style="width:120px; height:18px;"></div>
+            <div class="skeleton-box" style="width:50px; height:18px;"></div>
+          </div>
+          <div class="skeleton-box" style="width:80%; height:14px;"></div>
+          <div class="skeleton-box" style="width:100%; height:28px;"></div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="skeleton-box" style="width:60px; height:12px;"></div>
+            <div class="skeleton-box" style="width:70px; height:24px; border-radius:4px;"></div>
+          </div>
+        </div>
+      `).join('');
     }
-    btnGrid.addEventListener('click', () => setView('grid'));
-    btnList.addEventListener('click', () => setView('list'));
-    setView(localStorage.getItem('lantern_view') || 'grid');
+
+    function bindEvents() {
+      // View Toggle
+      const btnGrid = document.getElementById('btnGrid');
+      const btnList = document.getElementById('btnList');
+      const gridEl = document.getElementById('servicesGrid');
+
+      function setView(view) {
+        if (view === 'list') {
+          gridEl.classList.add('list-view');
+          btnList.classList.add('active');
+          btnGrid.classList.remove('active');
+        } else {
+          gridEl.classList.remove('list-view');
+          btnGrid.classList.add('active');
+          btnList.classList.remove('active');
+        }
+        localStorage.setItem('lantern_view', view);
+      }
+      btnGrid.addEventListener('click', () => setView('grid'));
+      btnList.addEventListener('click', () => setView('list'));
+      setView(localStorage.getItem('lantern_view') || 'grid');
+
+      // Search Box Events
+      const searchInput = document.getElementById('serviceSearchInput');
+      const searchClearBtn = document.getElementById('searchClearBtn');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          state.searchQuery = e.target.value.trim().toLowerCase();
+          if (searchClearBtn) {
+            searchClearBtn.style.display = state.searchQuery ? 'block' : 'none';
+          }
+          renderServices();
+        });
+      }
+      if (searchClearBtn) {
+        searchClearBtn.addEventListener('click', () => {
+          if (searchInput) searchInput.value = '';
+          state.searchQuery = '';
+          searchClearBtn.style.display = 'none';
+          renderServices();
+        });
+      }
+
+      // Group Filter Select
+      const groupFilterSelect = document.getElementById('groupFilterSelect');
+      if (groupFilterSelect) {
+        groupFilterSelect.addEventListener('change', (e) => {
+          state.groupFilter = e.target.value;
+          renderServices();
+        });
+      }
+
+      // Status Filters
+      document.querySelectorAll('.filter-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+          document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+          e.currentTarget.classList.add('active');
+          state.filter = e.currentTarget.dataset.filter;
+          renderServices();
+        });
+      });
+
+      // Uptime Range Selector Tabs
+      document.querySelectorAll('#uptimeRangeTabs .uptime-range-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const range = e.target.dataset.range;
+          if (!range) return;
+          state.uptimeRange = range;
+          updateUptimeRangeTabs(range);
+          if (state.activeService) {
+            loadServiceUptime(state.activeService, range);
+          }
+        });
+      });
+
+      // Refresh
+      document.getElementById('btnRefresh').addEventListener('click', () => {
+        clearInterval(state.timer);
+        loadData();
+        state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
+        showToast('Services refreshed', 'info');
+      });
+
+      // Drawers Close
+      document.getElementById('sdClose').addEventListener('click', () => closeDrawer('serviceDrawerOverlay'));
+      document.getElementById('diagClose').addEventListener('click', () => closeDrawer('diagDrawerOverlay'));
+      document.querySelectorAll('.drawer-overlay').forEach(overlay => {
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) closeDrawer(overlay.id);
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          closeDrawer('serviceDrawerOverlay');
+          closeDrawer('diagDrawerOverlay');
+          closeDrawer('settingsDrawerOverlay');
+        }
+      });
+
+      // Diagnostics Open
+      if (!isPublic) {
+        document.getElementById('btnDiagnostics').addEventListener('click', () => {
+          openDrawer('diagDrawerOverlay');
+          loadDiagnostics();
+        });
+        
+        document.getElementById('diagFilterSelect').addEventListener('change', (e) => {
+          state.diagFilter = e.target.value;
+          loadDiagnostics();
+        });
+
+        // Maintenance Toggle
+        document.getElementById('btnToggleMaint').addEventListener('click', async () => {
+          if (!state.activeService) return;
+          const btn = document.getElementById('btnToggleMaint');
+          const current = btn.innerText === 'Disable';
+          try {
+            const res = await fetch(API.maintenance(state.activeService), {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: !current, note: 'Toggled via UI' })
+            });
+            if (res.ok) {
+              const data = await res.json();
+              btn.innerText = data.enabled ? 'Disable' : 'Enable';
+              btn.className = data.enabled ? 'btn' : 'btn primary';
+              showToast(`Maintenance mode ${data.enabled ? 'enabled' : 'disabled'} for ${state.activeService}`, 'warning');
+              loadData();
+            }
+          } catch(e) {
+            console.error(e);
+            showToast('Failed to toggle maintenance mode', 'error');
+          }
+        });
+
+        // Save Group Assignment
+        const btnSaveGroup = document.getElementById('btnSaveGroup');
+        if (btnSaveGroup) {
+          btnSaveGroup.addEventListener('click', async () => {
+            if (!state.activeService) return;
+            const grpInput = document.getElementById('sdGroupInput');
+            const groupVal = grpInput ? grpInput.value.trim() : '';
+            btnSaveGroup.disabled = true;
+            btnSaveGroup.innerText = 'Saving...';
+            try {
+              const res = await fetch(API.group(state.activeService), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ group: groupVal })
+              });
+              if (res.ok) {
+                showToast(`Group updated to "${groupVal || 'None'}" for ${state.activeService}`, 'success');
+                const svc = state.services.find(s => s.service_name === state.activeService);
+                if (svc) svc.group_name = groupVal;
+                loadData();
+                loadServiceMetadata(state.activeService);
+              } else {
+                showToast('Failed to update service group', 'error');
+              }
+            } catch (err) {
+              showToast(`Error: ${err.message}`, 'error');
+            } finally {
+              btnSaveGroup.disabled = false;
+              btnSaveGroup.innerText = 'Save';
+            }
+          });
+        }
+
+        // Docker Restart Button
+        const btnDockerRestart = document.getElementById('btnDockerRestart');
+        if (btnDockerRestart) {
+          btnDockerRestart.addEventListener('click', async () => {
+            if (!state.activeService) return;
+            if (!confirm(`Are you sure you want to restart the container for "${state.activeService}"?`)) return;
+            btnDockerRestart.disabled = true;
+            btnDockerRestart.innerHTML = 'Restarting...';
+            try {
+              const res = await fetch(API.dockerRestart(state.activeService), { method: 'POST' });
+              const data = await res.json();
+              if (res.ok) {
+                showToast(data.message || 'Container restart initiated', 'success');
+                loadDockerStatus(state.activeService);
+                loadData();
+              } else {
+                showToast(data.error || 'Failed to restart container', 'error');
+              }
+            } catch (err) {
+              showToast(`Restart error: ${err.message}`, 'error');
+            } finally {
+              btnDockerRestart.disabled = false;
+              btnDockerRestart.innerHTML = `
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                Restart Container`;
+            }
+          });
+        }
+
+        // Docker Logs Toggle, Refresh, and Copy
+        const btnToggleDockerLogs = document.getElementById('btnToggleDockerLogs');
+        const logsWrap = document.getElementById('sdDockerLogsWrap');
+        if (btnToggleDockerLogs && logsWrap) {
+          btnToggleDockerLogs.addEventListener('click', () => {
+            const isHidden = logsWrap.style.display === 'none';
+            logsWrap.style.display = isHidden ? 'flex' : 'none';
+            btnToggleDockerLogs.innerText = isHidden ? 'Hide Logs' : 'View Logs';
+            if (isHidden && state.activeService) {
+              loadDockerLogs(state.activeService);
+            }
+          });
+        }
+
+        const btnRefreshDockerLogs = document.getElementById('btnRefreshDockerLogs');
+        if (btnRefreshDockerLogs) {
+          btnRefreshDockerLogs.addEventListener('click', () => {
+            if (state.activeService) loadDockerLogs(state.activeService);
+          });
+        }
+
+        const btnCopyDockerLogs = document.getElementById('btnCopyDockerLogs');
+        if (btnCopyDockerLogs) {
+          btnCopyDockerLogs.addEventListener('click', () => {
+            const pre = document.getElementById('sdDockerLogsPre');
+            if (pre && pre.innerText) {
+              navigator.clipboard.writeText(pre.innerText);
+              showToast('Container logs copied to clipboard', 'info');
+            }
+          });
+        }
+
+        const sdDockerLogTail = document.getElementById('sdDockerLogTail');
+        if (sdDockerLogTail) {
+          sdDockerLogTail.addEventListener('change', () => {
+            if (state.activeService) loadDockerLogs(state.activeService);
+          });
+        }
+      }
+
+      // Settings Drawer Events
+      if (!isPublic) {
+        const btnSettings = document.getElementById('btnSettings');
+        if (btnSettings) btnSettings.addEventListener('click', openSettings);
+        const settingsClose = document.getElementById('settingsClose');
+        if (settingsClose) settingsClose.addEventListener('click', closeSettings);
+
+        document.querySelectorAll('.theme-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            const th = e.currentTarget.dataset.themeVal;
+            setTheme(th);
+            showToast(`Switched to ${th} theme`, 'info');
+          });
+        });
+
+        document.querySelectorAll('.swatch-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            setAccentColor(e.currentTarget.dataset.color);
+            showToast('Accent color updated', 'success');
+          });
+        });
+
+        const accentPicker = document.getElementById('accentPicker');
+        if (accentPicker) {
+          accentPicker.addEventListener('input', (e) => setAccentColor(e.target.value));
+        }
+        const btnResetAccent = document.getElementById('btnResetAccent');
+        if (btnResetAccent) {
+          btnResetAccent.addEventListener('click', () => {
+            setAccentColor(null);
+            showToast('Reset accent color to default', 'info');
+          });
+        }
+
+        const btnSaveWebhooks = document.getElementById('btnSaveWebhooks');
+        if (btnSaveWebhooks) btnSaveWebhooks.addEventListener('click', saveWebhookSettings);
+
+        const btnTestWebhook = document.getElementById('btnTestWebhook');
+        if (btnTestWebhook) btnTestWebhook.addEventListener('click', testWebhookChannel);
+      }
+
+      setTheme(localStorage.getItem('lantern_theme') || 'dark');
+      const savedAccent = localStorage.getItem('lantern_accent');
+      if (savedAccent) setAccentColor(savedAccent);
+    }
 
     // Theme & Accent Management
     function setTheme(theme) {
@@ -1090,6 +1637,7 @@
             statusEl.innerText = '✓ Saved successfully';
             statusEl.style.color = 'var(--up)';
           }
+          showToast('Webhooks saved successfully', 'success');
           await loadWebhookSettings();
         } else {
           const err = await res.json();
@@ -1097,12 +1645,14 @@
             statusEl.innerText = `Error: ${err.error || 'Failed to save'}`;
             statusEl.style.color = 'var(--down)';
           }
+          showToast(`Save failed: ${err.error || 'Check inputs'}`, 'error');
         }
       } catch (err) {
         if (statusEl) {
           statusEl.innerText = `Error: ${err.message}`;
           statusEl.style.color = 'var(--down)';
         }
+        showToast(`Save error: ${err.message}`, 'error');
       } finally {
         btn.disabled = false;
         btn.innerText = 'Save Webhooks';
@@ -1134,148 +1684,71 @@
             }
           }
           resBox.innerHTML = out || 'No channels targeted.';
+          showToast('Webhook test complete', 'info');
         } else {
           resBox.innerHTML = `❌ Error: ${data.message || data.error}`;
+          showToast('Webhook test failed', 'error');
         }
       } catch (e) {
         resBox.innerHTML = `<span style="color:var(--down)">Request Failed: ${e.message}</span>`;
+        showToast('Webhook test request failed', 'error');
       }
     }
 
-    // Settings Event Bindings
-    if (!isPublic) {
-      const btnSettings = document.getElementById('btnSettings');
-      if (btnSettings) btnSettings.addEventListener('click', openSettings);
-      const settingsClose = document.getElementById('settingsClose');
-      if (settingsClose) settingsClose.addEventListener('click', closeSettings);
-
-      document.querySelectorAll('.theme-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => setTheme(e.currentTarget.dataset.themeVal));
-      });
-
-      document.querySelectorAll('.swatch-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => setAccentColor(e.currentTarget.dataset.color));
-      });
-
-      const accentPicker = document.getElementById('accentPicker');
-      if (accentPicker) {
-        accentPicker.addEventListener('input', (e) => setAccentColor(e.target.value));
-      }
-      const btnResetAccent = document.getElementById('btnResetAccent');
-      if (btnResetAccent) {
-        btnResetAccent.addEventListener('click', () => setAccentColor(null));
-      }
-
-      const btnSaveWebhooks = document.getElementById('btnSaveWebhooks');
-      if (btnSaveWebhooks) btnSaveWebhooks.addEventListener('click', saveWebhookSettings);
-
-      const btnTestWebhook = document.getElementById('btnTestWebhook');
-      if (btnTestWebhook) btnTestWebhook.addEventListener('click', testWebhookChannel);
-    }
-
-    setTheme(localStorage.getItem('lantern_theme') || 'dark');
-    const savedAccent = localStorage.getItem('lantern_accent');
-    if (savedAccent) setAccentColor(savedAccent);
-
-
-      // Filters
-      document.querySelectorAll('.filter-pill').forEach(pill => {
-        pill.addEventListener('click', (e) => {
-          document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
-          e.target.classList.add('active');
-          state.filter = e.target.dataset.filter;
-          renderServices();
-        });
-      });
-
-      // Uptime Range Selector Tabs
-      document.querySelectorAll('#uptimeRangeTabs .uptime-range-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const range = e.target.dataset.range;
-          if (!range) return;
-          state.uptimeRange = range;
-          updateUptimeRangeTabs(range);
-          if (state.activeService) {
-            loadServiceUptime(state.activeService, range);
-          }
-        });
-      });
-
-      // Refresh
-      document.getElementById('btnRefresh').addEventListener('click', () => {
-        clearInterval(state.timer);
-        loadData();
-        state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
-      });
-
-      // Drawers Close
-      document.getElementById('sdClose').addEventListener('click', () => closeDrawer('serviceDrawerOverlay'));
-      document.getElementById('diagClose').addEventListener('click', () => closeDrawer('diagDrawerOverlay'));
-      document.querySelectorAll('.drawer-overlay').forEach(overlay => {
-        overlay.addEventListener('click', (e) => {
-          if(e.target === overlay) closeDrawer(overlay.id);
-        });
-      });
-      document.addEventListener('keydown', (e) => {
-        if(e.key === 'Escape') {
-          closeDrawer('serviceDrawerOverlay');
-          closeDrawer('diagDrawerOverlay');
-          closeDrawer('settingsDrawerOverlay');
-        }
-      });
-
-      // Diagnostics Open
-      if (!isPublic) {
-        document.getElementById('btnDiagnostics').addEventListener('click', () => {
-          openDrawer('diagDrawerOverlay');
-          loadDiagnostics();
-        });
-        
-        document.getElementById('diagFilterSelect').addEventListener('change', (e) => {
-          state.diagFilter = e.target.value;
-          loadDiagnostics();
-        });
-
-        // Maintenance Toggle
-        document.getElementById('btnToggleMaint').addEventListener('click', async () => {
-          if(!state.activeService) return;
-          const btn = document.getElementById('btnToggleMaint');
-          const current = btn.innerText === 'Disable';
-          try {
-            const res = await fetch(API.maintenance(state.activeService), {
-              method: 'PUT',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({enabled: !current, note: 'Toggled via UI'})
-            });
-            if(res.ok) {
-              const data = await res.json();
-              btn.innerText = data.enabled ? 'Disable' : 'Enable';
-              btn.className = data.enabled ? 'btn' : 'btn primary';
-              loadData();
-            }
-          } catch(e) { console.error(e); }
-        });
-      }
-    }
-
-    // Data Loading
+    // Data Loading & Group Population
     async function loadData() {
       const pulse = document.getElementById('loadingIndicator');
-      pulse.classList.remove('loading');
+      if (pulse) pulse.classList.remove('loading');
       try {
-        const res = await fetch(API.services);
-        if (res.ok) {
-          state.services = await res.json();
+        const [svcRes, grpRes] = await Promise.all([
+          fetch(API.services),
+          fetch(API.groups).catch(() => null)
+        ]);
+
+        if (svcRes.ok) {
+          state.services = await svcRes.json();
           updateMetrics();
           renderServices();
           if (!isPublic) updateDiagFilterOptions();
         }
+
+        if (grpRes && grpRes.ok) {
+          state.groups = await grpRes.json();
+          updateGroupFilterOptions();
+        } else {
+          updateGroupFilterOptions();
+        }
       } catch(e) {
-        console.error('Failed to load services', e);
+        console.error('Failed to load data', e);
       } finally {
-        pulse.classList.add('loading');
-        document.getElementById('lastUpdated').innerText = new Date().toLocaleTimeString();
+        if (pulse) pulse.classList.add('loading');
+        const lastUp = document.getElementById('lastUpdated');
+        if (lastUp) lastUp.innerText = new Date().toLocaleTimeString();
       }
+    }
+
+    function updateGroupFilterOptions() {
+      const sel = document.getElementById('groupFilterSelect');
+      if (!sel) return;
+      const current = state.groupFilter || sel.value;
+
+      // Extract unique groups from state.services or state.groups
+      const groupCounts = new Map();
+      state.services.forEach(s => {
+        if (s.group_name && s.group_name.trim() !== '') {
+          const g = s.group_name.trim();
+          groupCounts.set(g, (groupCounts.get(g) || 0) + 1);
+        }
+      });
+
+      let optionsHTML = '<option value="">All Groups</option>';
+      const sortedGroups = Array.from(groupCounts.keys()).sort();
+      sortedGroups.forEach(g => {
+        optionsHTML += `<option value="${escapeHtml(g)}">${escapeHtml(g)} (${groupCounts.get(g)})</option>`;
+      });
+
+      sel.innerHTML = optionsHTML;
+      sel.value = current;
     }
 
     function updateMetrics() {
@@ -1293,8 +1766,10 @@
       });
 
       const avgUptime = countUptime7d > 0 ? (totalUptime7d / countUptime7d).toFixed(2) : '--';
-      document.getElementById('metricUptime').innerText = `${avgUptime}%`;
-      document.getElementById('metricIncidents').innerText = activeIncidents;
+      const upEl = document.getElementById('metricUptime');
+      if (upEl) upEl.innerText = `${avgUptime}%`;
+      const incEl = document.getElementById('metricIncidents');
+      if (incEl) incEl.innerText = activeIncidents;
       
       const statEl = document.getElementById('metricStatus');
       const statSubEl = document.getElementById('metricStatusSub');
@@ -1302,42 +1777,49 @@
       // NOTE: Metric card value text ("All Systems Operational", "100.00%") is intentionally kept white (var(--text-primary)),
       // matching the overall dashboard aesthetic. The card containers/border accents follow the theme accent,
       // but metric value texts remain white unless an active incident/disruption occurs (var(--down)).
-      if (activeIncidents === 0) {
-        statEl.innerText = 'All Systems Operational';
-        statEl.style.color = 'var(--text-primary)';
-        statSubEl.innerText = 'No active incidents detected';
-      } else {
-        statEl.innerText = 'Service Disruption';
-        statEl.style.color = 'var(--down)';
-        statSubEl.innerText = `${activeIncidents} service(s) currently affected`;
+      if (statEl && statSubEl) {
+        if (activeIncidents === 0) {
+          statEl.innerText = 'All Systems Operational';
+          statEl.style.color = 'var(--text-primary)';
+          statSubEl.innerText = 'No active incidents detected';
+        } else {
+          statEl.innerText = 'Service Disruption';
+          statEl.style.color = 'var(--down)';
+          statSubEl.innerText = `${activeIncidents} service(s) currently affected`;
+        }
       }
     }
 
-    
     function buildCardHTML(s, cls, statText, trendHTML) {
-        return `
-            <div class="service-header">
-              <div class="service-name-group">
-                <div class="status-dot"></div>
-                <div>
-                  <div class="service-name">${escapeHtml(s.service_name)}</div>
-                </div>
+      const groupBadge = s.group_name ? `<span class="service-group-badge">${escapeHtml(s.group_name)}</span>` : '';
+      return `
+        <div class="service-header">
+          <div class="service-name-group">
+            <div class="status-dot"></div>
+            <div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div class="service-name">${escapeHtml(s.service_name)}</div>
+                ${groupBadge}
               </div>
-              <div class="service-status-text">${statText}</div>
             </div>
-            <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
-            ${trendHTML}
-            <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-               <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
-               <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
-            </div>
-          `;
+          </div>
+          <div class="service-status-text">${statText}</div>
+        </div>
+        <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
+        ${trendHTML}
+        <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+           <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
+           <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
+        </div>
+      `;
     }
 
     function renderServices() {
       const grid = document.getElementById('servicesGrid');
-      let filtered = state.services;
+      if (!grid) return;
+      let filtered = state.services || [];
       
+      // 1. Status Filter
       if (state.filter !== 'all') {
         filtered = filtered.filter(s => {
           if (state.filter === 'down') return s.status === 'down';
@@ -1347,14 +1829,37 @@
         });
       }
 
-      document.getElementById('serviceCount').innerText = filtered.length;
+      // 2. Group Filter
+      if (state.groupFilter) {
+        filtered = filtered.filter(s => (s.group_name || '').toLowerCase() === state.groupFilter.toLowerCase());
+      }
+
+      // 3. Search Query Filter
+      if (state.searchQuery) {
+        const q = state.searchQuery;
+        filtered = filtered.filter(s => 
+          s.service_name.toLowerCase().includes(q) ||
+          (s.group_name && s.group_name.toLowerCase().includes(q)) ||
+          (s.message && s.message.toLowerCase().includes(q))
+        );
+      }
+
+      const countEl = document.getElementById('serviceCount');
+      if (countEl) countEl.innerText = filtered.length;
 
       if (filtered.length === 0) {
-        grid.innerHTML = `<div style="grid-column: 1/-1; padding: 40px; text-align: center; color: var(--text-muted); background: var(--panel-bg); border-radius: var(--radius-md); border: 1px dashed var(--border);">No services found for current filter.</div>`;
+        grid.innerHTML = `
+          <div class="empty-state">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <div class="empty-state-title">No services found</div>
+            <div class="empty-state-sub">No services match your active search filter or status selection.</div>
+            <button class="btn" onclick="resetFilters()">Reset Filters</button>
+          </div>`;
         return;
       }
-      if (grid.children.length === 1 && grid.children[0].tagName === 'DIV' && !grid.children[0].classList.contains('service-card')) {
-          grid.innerHTML = '';
+
+      if (grid.children.length === 1 && grid.children[0].classList.contains('empty-state')) {
+        grid.innerHTML = '';
       }
 
       const existingCards = Array.from(grid.querySelectorAll('.service-card'));
@@ -1372,68 +1877,74 @@
       filtered.forEach((s, index) => {
         try {
           let card = existingMap.get(s.service_name);
-        if (!card) {
-          card = document.createElement('div');
-          grid.appendChild(card);
-        } else {
-          if (grid.children[index] !== card) {
-             grid.insertBefore(card, grid.children[index]);
+          if (!card) {
+            card = document.createElement('div');
+            grid.appendChild(card);
+          } else {
+            if (grid.children[index] !== card) {
+              grid.insertBefore(card, grid.children[index]);
+            }
           }
-        }
-        
-        const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
-        const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN');
-        
-        let trendHTML = '';
-        if (!isPublic) {
-          let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
-          if (s.history && Array.isArray(s.history)) {
+          
+          const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
+          const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN');
+          
+          let trendHTML = '';
+          if (!isPublic) {
+            let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
+            if (s.history && Array.isArray(s.history)) {
               blocks = s.history.map(b => {
-                 const cls = b.status || 'empty';
-                 const date = new Date(b.start).toLocaleDateString();
-                 return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
+                const cls = b.status || 'empty';
+                const date = new Date(b.start).toLocaleDateString();
+                return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
               }).join('');
+            }
+            
+            const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
+            
+            trendHTML = `
+              <div class="trend-container hide-public">
+                 <div class="trend-header">
+                   <span>30-Day History</span>
+                   <span>${uptimePercent}</span>
+                 </div>
+                 <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                    ${blocks}
+                 </div>
+              </div>
+            `;
           }
-          
-          const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
-          
-          trendHTML = `
-            <div class="trend-container hide-public">
-               <div class="trend-header">
-                 <span>30-Day History</span>
-                 <span>${uptimePercent}</span>
-               </div>
-               <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
-                  ${blocks}
-               </div>
-            </div>
-          `;
-        }
 
-        const newHTML = buildCardHTML(s, cls, statText, trendHTML);
-        if (card.innerHTML !== newHTML) {
-          card.innerHTML = newHTML;
-          card.className = 'service-card ' + cls;
-          card.dataset.service = s.service_name;
-        }
+          const newHTML = buildCardHTML(s, cls, statText, trendHTML);
+          if (card.innerHTML !== newHTML) {
+            card.innerHTML = newHTML;
+            card.className = 'service-card ' + cls;
+            card.dataset.service = s.service_name;
+          }
         } catch (err) {
           console.error("Failed to render service:", s.service_name, err);
         }
       });
     }
 
+    window.resetFilters = function() {
+      state.filter = 'all';
+      state.groupFilter = '';
+      state.searchQuery = '';
+      const sInput = document.getElementById('serviceSearchInput');
+      if (sInput) sInput.value = '';
+      const sClear = document.getElementById('searchClearBtn');
+      if (sClear) sClear.style.display = 'none';
+      const gSel = document.getElementById('groupFilterSelect');
+      if (gSel) gSel.value = '';
+      document.querySelectorAll('.filter-pill').forEach(p => {
+        if (p.dataset.filter === 'all') p.classList.add('active');
+        else p.classList.remove('active');
+      });
+      renderServices();
+    };
 
-    function renderStrip(id, buckets) {
-      const container = document.getElementById(`trend-${id}`);
-      if (!container) return;
-      container.innerHTML = buckets.map(b => {
-         const cls = b.status || 'empty';
-         const date = new Date(b.start).toLocaleDateString();
-         return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
-      }).join('');
-    }
-
-    // Service Drawer
+    // Service Detail Drawer
     async function openServiceDrawer(name) {
       state.activeService = name;
       const svc = state.services.find(s => s.service_name === name);
@@ -1454,6 +1965,10 @@
       dot.style.color = `var(--${cls})`;
       dot.style.boxShadow = `0 0 10px var(--${cls}-glow)`;
 
+      // Populate Group Input
+      const groupInput = document.getElementById('sdGroupInput');
+      if (groupInput) groupInput.value = svc.group_name || '';
+
       // Reset
       document.getElementById('sdHistoryBody').innerHTML = '<tr><td colspan="3" style="text-align:center">Loading...</td></tr>';
       document.getElementById('sdIncidents').innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading...</div>';
@@ -1462,6 +1977,12 @@
       maintBtn.innerText = '...';
 
       openDrawer('serviceDrawerOverlay');
+
+      // Load Metadata & Docker Controls
+      loadServiceMetadata(name);
+      if (!isPublic) {
+        loadDockerControls(name);
+      }
 
       // Fetch Data
       if(!isPublic) {
@@ -1505,6 +2026,98 @@
       // Uptime is available on both public and authenticated
       updateUptimeRangeTabs(state.uptimeRange);
       loadServiceUptime(name, state.uptimeRange);
+    }
+
+    async function loadServiceMetadata(name) {
+      const metaBody = document.getElementById('sdMetadataBody');
+      if (!metaBody) return;
+      metaBody.innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:12px;">Loading metadata...</div>';
+
+      try {
+        const res = await fetch(API.metadata(name));
+        if (!res.ok) throw new Error('Failed to load metadata');
+        const meta = await res.json();
+
+        let items = [];
+        items.push({ label: 'Service Name', val: meta.service_name });
+        items.push({ label: 'Group', val: meta.group_name || 'Unassigned' });
+        items.push({ label: 'Service Type', val: meta.type === 'docker' ? '🐳 Docker Container' : '🖥️ Host Service' });
+
+        if (meta.docker_detected) {
+          if (meta.container_id) items.push({ label: 'Container ID', val: meta.container_id });
+          if (meta.image) items.push({ label: 'Image', val: meta.image });
+          if (meta.state) items.push({ label: 'State', val: meta.health_status ? `${meta.state} (${meta.health_status})` : meta.state });
+          if (meta.ip_address) items.push({ label: 'IP / Network', val: `${meta.ip_address} (${meta.network_name || 'default'})` });
+          
+          if (meta.ports && meta.ports.length > 0) {
+            const portStrs = meta.ports.map(p => p.host_port ? `${p.host_port}→${p.container_port}/${p.type}` : `${p.container_port}/${p.type}`);
+            items.push({ label: 'Ports Mapped', val: portStrs.join(', ') });
+          }
+          if (meta.started_at) items.push({ label: 'Started At', val: formatTS(meta.started_at) });
+        }
+
+        items.push({ label: 'Total Events Logged', val: meta.total_events_recorded || 0 });
+        items.push({ label: 'Last Telemetry', val: relativeTime(meta.last_seen) });
+
+        metaBody.innerHTML = items.map(it => `
+          <div class="meta-item">
+            <span class="meta-label">${escapeHtml(it.label)}</span>
+            <span class="meta-val">${escapeHtml(String(it.val))}</span>
+          </div>
+        `).join('');
+      } catch (err) {
+        metaBody.innerHTML = `<div style="grid-column:1/-1; color:var(--text-muted); font-size:12px;">Metadata unavailable (${escapeHtml(err.message)})</div>`;
+      }
+    }
+
+    async function loadDockerControls(name) {
+      const dockerSec = document.getElementById('sdDockerSection');
+      const dockerInfo = document.getElementById('sdDockerInfo');
+      const logsWrap = document.getElementById('sdDockerLogsWrap');
+      if (!dockerSec) return;
+
+      dockerSec.style.display = 'none';
+      if (logsWrap) logsWrap.style.display = 'none';
+
+      if (isPublic) return;
+
+      try {
+        const res = await fetch(API.dockerStatus(name));
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d.available && d.detected) {
+          dockerSec.style.display = 'flex';
+          dockerInfo.innerHTML = `
+            <div><strong>Container:</strong> ${escapeHtml(d.container_name || d.container_id)}</div>
+            <div><strong>ID:</strong> ${escapeHtml(d.container_id)}</div>
+            <div><strong>State:</strong> <span style="color:${d.state === 'running' ? 'var(--up)' : 'var(--down)'}; font-weight:600;">${escapeHtml((d.state||'').toUpperCase())}</span></div>
+            <div><strong>Status:</strong> ${escapeHtml(d.status || 'Active')}</div>
+          `;
+        }
+      } catch (e) {
+        console.error('Docker status check failed:', e);
+      }
+    }
+
+    async function loadDockerLogs(name) {
+      const pre = document.getElementById('sdDockerLogsPre');
+      const tail = document.getElementById('sdDockerLogTail')?.value || 100;
+      if (!pre) return;
+      pre.innerText = 'Fetching live log tail...';
+
+      try {
+        const res = await fetch(API.dockerLogs(name, tail));
+        if (!res.ok) {
+          const err = await res.json();
+          pre.innerText = `Error: ${err.error || 'Failed to fetch logs'}`;
+          return;
+        }
+        const data = await res.json();
+        pre.innerText = data.logs || '(No logs available in selected tail range)';
+        pre.scrollTop = pre.scrollHeight;
+      } catch (e) {
+        pre.innerText = `Failed to fetch logs: ${e.message}`;
+      }
     }
 
     function updateUptimeRangeTabs(range) {
@@ -1607,6 +2220,7 @@
     // Diagnostics Drawer logic
     function updateDiagFilterOptions() {
       const sel = document.getElementById('diagFilterSelect');
+      if (!sel) return;
       const current = sel.value;
       const names = [...new Set(state.services.map(s => s.service_name))].sort();
       sel.innerHTML = '<option value="">All Services</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
@@ -1656,6 +2270,7 @@
     const diagCache = {};
     async function toggleDiag(id) {
       const card = document.getElementById(`diag-card-${id}`);
+      if (!card) return;
       const isOpen = card.classList.contains('open');
       
       // Close others
@@ -1690,16 +2305,19 @@
        navigator.clipboard.writeText(text);
        const old = btn.innerText;
        btn.innerText = 'Copied!';
+       showToast('Diagnostic payload copied to clipboard', 'info');
        setTimeout(() => btn.innerText = old, 2000);
     }
 
     // Utilities
     function openDrawer(id) {
-      document.getElementById(id).classList.add('open');
+      const el = document.getElementById(id);
+      if (el) el.classList.add('open');
       document.body.style.overflow = 'hidden';
     }
     function closeDrawer(id) {
-      document.getElementById(id).classList.remove('open');
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('open');
       document.body.style.overflow = '';
     }
 

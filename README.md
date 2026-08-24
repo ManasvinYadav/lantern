@@ -6,14 +6,18 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.3.0)
+## Features (v0.4.0)
 
 - **Push-based Heartbeats**: Services report their own status. No active scraping means Lantern can run securely behind NATs or on the edge.
+- **Service Grouping**: Organize services into custom groups (e.g. `media`, `networking`, `monitoring`) with dedicated filtering on the dashboard.
+- **Docker Management**: Integrated Docker controls for container restart and live log tails from the service detail drawer (guarded behind admin auth).
+- **Service Detail & Metadata Inspector**: Real-time inspection of container ports, image tags, IP addresses, network topology, and health check history.
 - **Background Stale Detection**: Automatically marks services as "Down" (Stale) if they miss their heartbeat window (configurable via `LANTERN_STALE_HOURS`).
-- **Webhooks & Notifications**: Native integrations with Discord, Telegram, Gotify, and generic webhooks to alert you immediately on service degradation.
+- **Web-based Webhook Configuration**: Dedicated Settings drawer to configure, save, and test Discord, Telegram, Gotify, and generic webhooks with real-time test output.
+- **Theming & Dynamic Accent Picker**: Dark, Midnight, and Light themes with customizable accent colors that reactively update across the entire dashboard and service drawers.
+- **Instant Search & Real-time Filters**: Instant substring search across service names, groups, and messages with empty-state and toast notifications.
 - **Maintenance Mode**: One-click UI toggles to silence alerts and ignore downtime during planned maintenance.
-- **Sleek UI Dashboard**: A dependency-free HTML/JS frontend featuring Grid and List views, historical 30-day sparklines, diagnostic drawers, and real-time DOM diffing.
-- **Scoped API Tokens**: Secure your ingest APIs using Bearer tokens while keeping your status dashboard public via unauthenticated read-only routes.
+- **Scoped API Tokens**: Secure ingest and admin management APIs using Bearer tokens while keeping public status routes unauthenticated.
 
 ## Screenshots
 
