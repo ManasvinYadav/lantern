@@ -156,6 +156,12 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     service_name TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS webhook_configs (
+    channel    TEXT PRIMARY KEY,
+    url        TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -310,28 +316,63 @@ type DiagnosticRunDetail struct {
 // Background workers & Webhooks
 // ---------------------------------------------------------------------------
 
-func dispatchWebhooks(cfg *Config, service, oldStatus, newStatus, message string) {
+// getEffectiveWebhookURL retrieves the configured webhook URL for a channel from the DB,
+// falling back to environment variables if not set in DB.
+func getEffectiveWebhookURL(db *sql.DB, cfg *Config, channel string) (string, string) {
+	if db != nil {
+		var dbURL string
+		err := db.QueryRow("SELECT url FROM webhook_configs WHERE channel = ?", channel).Scan(&dbURL)
+		if err == nil && strings.TrimSpace(dbURL) != "" {
+			return strings.TrimSpace(dbURL), "db"
+		}
+	}
+	switch channel {
+	case "discord":
+		if cfg.WebhookDiscord != "" {
+			return cfg.WebhookDiscord, "env"
+		}
+	case "telegram":
+		if cfg.WebhookTelegram != "" {
+			return cfg.WebhookTelegram, "env"
+		}
+	case "gotify":
+		if cfg.WebhookGotify != "" {
+			return cfg.WebhookGotify, "env"
+		}
+	case "generic":
+		if cfg.WebhookGeneric != "" {
+			return cfg.WebhookGeneric, "env"
+		}
+	}
+	return "", "none"
+}
+
+func dispatchWebhooks(db *sql.DB, cfg *Config, service, oldStatus, newStatus, message string) {
 	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
-	if cfg.WebhookDiscord != "" {
+
+	discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord")
+	if discordURL != "" {
 		payload := map[string]string{"content": text}
 		body, _ := json.Marshal(payload)
-		http.Post(cfg.WebhookDiscord, "application/json", bytes.NewBuffer(body))
+		http.Post(discordURL, "application/json", bytes.NewBuffer(body))
 	}
-	if cfg.WebhookTelegram != "" {
-		// Telegram webhook URL should include the bot token and chat ID, e.g. https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
+	telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram")
+	if telegramURL != "" {
 		payload := map[string]string{"text": text}
 		body, _ := json.Marshal(payload)
-		http.Post(cfg.WebhookTelegram, "application/json", bytes.NewBuffer(body))
+		http.Post(telegramURL, "application/json", bytes.NewBuffer(body))
 	}
-	if cfg.WebhookGotify != "" {
+	gotifyURL, _ := getEffectiveWebhookURL(db, cfg, "gotify")
+	if gotifyURL != "" {
 		payload := map[string]string{"title": "Lantern Alert", "message": text}
 		body, _ := json.Marshal(payload)
-		http.Post(cfg.WebhookGotify, "application/json", bytes.NewBuffer(body))
+		http.Post(gotifyURL, "application/json", bytes.NewBuffer(body))
 	}
-	if cfg.WebhookGeneric != "" {
+	genericURL, _ := getEffectiveWebhookURL(db, cfg, "generic")
+	if genericURL != "" {
 		payload := map[string]string{"service": service, "old": oldStatus, "new": newStatus, "message": message}
 		body, _ := json.Marshal(payload)
-		http.Post(cfg.WebhookGeneric, "application/json", bytes.NewBuffer(body))
+		http.Post(genericURL, "application/json", bytes.NewBuffer(body))
 	}
 }
 
@@ -358,7 +399,7 @@ WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
 			t, err := time.Parse(time.RFC3339, ts)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
 				db.Exec(`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, 'down', 'Service missed heartbeat timeout', ?)`, name, time.Now().UTC().Format(time.RFC3339))
-				go dispatchWebhooks(cfg, name, status, "down", "Service missed heartbeat timeout")
+				go dispatchWebhooks(db, cfg, name, status, "down", "Service missed heartbeat timeout")
 			}
 		}
 		rows.Close()
@@ -446,7 +487,7 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 		var maint int
 		db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", req.ServiceName).Scan(&maint)
 		if maint == 0 && lastStatus != "" && lastStatus != req.Status {
-			go dispatchWebhooks(cfg, req.ServiceName, lastStatus, req.Status, req.Message)
+			go dispatchWebhooks(db, cfg, req.ServiceName, lastStatus, req.Status, req.Message)
 		}
 
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
@@ -767,20 +808,77 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // setupRoutes builds and returns the application router.
 
-// handleGetIntegrations handles GET /api/integrations.
-func handleGetIntegrations(cfg *Config) http.HandlerFunc {
+type WebhookChannelInfo struct {
+	Configured bool   `json:"configured"`
+	URL        string `json:"url"`
+	Source     string `json:"source"` // "db", "env", "none"
+}
+
+// handleGetWebhooks handles GET /api/webhooks.
+func handleGetWebhooks(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]bool{
-			"discord":  cfg.WebhookDiscord != "",
-			"telegram": cfg.WebhookTelegram != "",
-			"gotify":   cfg.WebhookGotify != "",
-			"generic":  cfg.WebhookGeneric != "",
-		})
+		channels := []string{"discord", "telegram", "gotify", "generic"}
+		resp := make(map[string]WebhookChannelInfo)
+		for _, ch := range channels {
+			u, src := getEffectiveWebhookURL(db, cfg, ch)
+			resp[ch] = WebhookChannelInfo{
+				Configured: u != "",
+				URL:        u,
+				Source:     src,
+			}
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// handlePutWebhooks handles PUT and POST /api/webhooks to save webhook URLs in DB.
+func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json payload")
+			return
+		}
+
+		validChannels := map[string]bool{"discord": true, "telegram": true, "gotify": true, "generic": true}
+
+		// Single channel payload: { "channel": "discord", "url": "..." }
+		if ch, ok := req["channel"]; ok {
+			ch = strings.ToLower(strings.TrimSpace(ch))
+			if !validChannels[ch] {
+				writeError(w, http.StatusBadRequest, "invalid channel: "+ch)
+				return
+			}
+			url := strings.TrimSpace(req["url"])
+			if url == "" {
+				db.Exec("DELETE FROM webhook_configs WHERE channel = ?", ch)
+			} else {
+				db.Exec(`INSERT INTO webhook_configs (channel, url, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+					ON CONFLICT(channel) DO UPDATE SET url = excluded.url, updated_at = CURRENT_TIMESTAMP`, ch, url)
+			}
+		} else {
+			// Multi-channel map: { "discord": "...", "telegram": "..." }
+			for ch, rawURL := range req {
+				ch = strings.ToLower(strings.TrimSpace(ch))
+				if !validChannels[ch] {
+					continue
+				}
+				url := strings.TrimSpace(rawURL)
+				if url == "" {
+					db.Exec("DELETE FROM webhook_configs WHERE channel = ?", ch)
+				} else {
+					db.Exec(`INSERT INTO webhook_configs (channel, url, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+						ON CONFLICT(channel) DO UPDATE SET url = excluded.url, updated_at = CURRENT_TIMESTAMP`, ch, url)
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "webhook configurations updated"})
 	}
 }
 
 // handleTestWebhook handles POST /api/webhooks/test.
-func handleTestWebhook(cfg *Config) http.HandlerFunc {
+func handleTestWebhook(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Channel string `json:"channel"`
@@ -788,33 +886,38 @@ func handleTestWebhook(cfg *Config) http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			req.Channel = "all"
 		}
-		
+		if req.Channel == "" {
+			req.Channel = "all"
+		}
+		req.Channel = strings.ToLower(strings.TrimSpace(req.Channel))
+
 		results := make(map[string]map[string]any)
 		testMsg := "🔆 Lantern Test Webhook: Notifications are working correctly!"
-		
-		doTest := func(name, url string, payload any) {
+
+		doTest := func(name string, payload any) {
 			if req.Channel != "all" && req.Channel != name {
 				return
 			}
+			url, src := getEffectiveWebhookURL(db, cfg, name)
 			if url == "" {
-				results[name] = map[string]any{"attempted": false, "message": "Environment variable not set"}
+				results[name] = map[string]any{"attempted": false, "source": "none", "message": "Webhook URL not configured"}
 				return
 			}
-			
+
 			body, _ := json.Marshal(payload)
 			resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
 			if err != nil {
-				results[name] = map[string]any{"attempted": true, "success": false, "message": err.Error()}
+				results[name] = map[string]any{"attempted": true, "success": false, "source": src, "message": err.Error()}
 				return
 			}
 			defer resp.Body.Close()
-			results[name] = map[string]any{"attempted": true, "success": resp.StatusCode < 400, "status_code": resp.StatusCode}
+			results[name] = map[string]any{"attempted": true, "success": resp.StatusCode < 400, "source": src, "status_code": resp.StatusCode}
 		}
 
-		doTest("discord", cfg.WebhookDiscord, map[string]string{"content": testMsg})
-		doTest("telegram", cfg.WebhookTelegram, map[string]string{"text": testMsg})
-		doTest("gotify", cfg.WebhookGotify, map[string]string{"title": "Lantern Alert", "message": testMsg})
-		doTest("generic", cfg.WebhookGeneric, map[string]string{"content": testMsg})
+		doTest("discord", map[string]string{"content": testMsg})
+		doTest("telegram", map[string]string{"text": testMsg})
+		doTest("gotify", map[string]string{"title": "Lantern Alert", "message": testMsg})
+		doTest("generic", map[string]string{"content": testMsg})
 
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "results": results})
 	}
@@ -828,8 +931,9 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Use(jsonMiddleware)
 
 	api.Handle("/health", handleHealth()).Methods(http.MethodGet)
-	api.Handle("/webhooks", handleGetIntegrations(cfg)).Methods(http.MethodGet)
-	api.Handle("/webhooks/test", handleTestWebhook(cfg)).Methods(http.MethodPost)
+	api.Handle("/webhooks", handleGetWebhooks(db, cfg)).Methods(http.MethodGet)
+	api.Handle("/webhooks", handlePutWebhooks(db)).Methods(http.MethodPut, http.MethodPost)
+	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 
 	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
