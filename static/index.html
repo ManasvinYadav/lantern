@@ -116,9 +116,13 @@
       --text-secondary: #94a3b8;
       --text-muted: #475569;
 
-      --up: #10b981;
-      --up-bg: rgba(16, 185, 129, 0.1);
-      --up-glow: rgba(16, 185, 129, 0.25);
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --accent-bg: rgba(16, 185, 129, 0.1);
+
+      --up: var(--accent);
+      --up-bg: var(--accent-bg);
+      --up-glow: var(--accent-glow);
       
       --down: #f43f5e;
       --down-bg: rgba(244, 63, 94, 0.1);
@@ -135,9 +139,6 @@
       --unknown: #64748b;
       --unknown-bg: rgba(100, 116, 139, 0.1);
       --unknown-glow: rgba(100, 116, 139, 0.25);
-
-      --accent: #10b981;
-      --accent-glow: rgba(16, 185, 129, 0.25);
 
       --radius-sm: 6px;
       --radius-md: 12px;
@@ -629,6 +630,10 @@
     if (accent) {
       document.documentElement.style.setProperty('--accent', accent);
       document.documentElement.style.setProperty('--accent-glow', accent + '40');
+      document.documentElement.style.setProperty('--accent-bg', accent + '20');
+      document.documentElement.style.setProperty('--up', accent);
+      document.documentElement.style.setProperty('--up-glow', accent + '40');
+      document.documentElement.style.setProperty('--up-bg', accent + '20');
     }
   </script>
 </head>
@@ -970,12 +975,20 @@
       if (!color) {
         document.documentElement.style.removeProperty('--accent');
         document.documentElement.style.removeProperty('--accent-glow');
+        document.documentElement.style.removeProperty('--accent-bg');
+        document.documentElement.style.removeProperty('--up');
+        document.documentElement.style.removeProperty('--up-glow');
+        document.documentElement.style.removeProperty('--up-bg');
         localStorage.removeItem('lantern_accent');
         if (hexDisp) hexDisp.innerText = 'Default';
         if (picker) picker.value = '#10b981';
       } else {
         document.documentElement.style.setProperty('--accent', color);
         document.documentElement.style.setProperty('--accent-glow', color + '40');
+        document.documentElement.style.setProperty('--accent-bg', color + '20');
+        document.documentElement.style.setProperty('--up', color);
+        document.documentElement.style.setProperty('--up-glow', color + '40');
+        document.documentElement.style.setProperty('--up-bg', color + '20');
         localStorage.setItem('lantern_accent', color);
         if (hexDisp) hexDisp.innerText = color;
         if (picker) picker.value = color;
@@ -983,10 +996,28 @@
 
       if (state.services && state.services.length > 0) {
         updateMetrics();
+        renderServices();
       }
 
-      if (state.activeService && state.lastUptimeDatapoints) {
-        renderGraph(state.lastUptimeDatapoints, state.uptimeRange);
+      if (state.activeService) {
+        const svc = state.services.find(s => s.service_name === state.activeService);
+        if (svc) {
+          const cls = svc.maintenance ? 'maintenance' : (svc.status || 'unknown');
+          const badge = document.getElementById('sdStatusBadge');
+          const dot = document.getElementById('sdStatusDot');
+          if (badge) {
+            badge.style.color = `var(--${cls})`;
+            badge.style.background = `var(--${cls}-bg)`;
+          }
+          if (dot) {
+            dot.style.background = `var(--${cls})`;
+            dot.style.color = `var(--${cls})`;
+            dot.style.boxShadow = `0 0 10px var(--${cls}-glow)`;
+          }
+        }
+        if (state.lastUptimeDatapoints) {
+          renderGraph(state.lastUptimeDatapoints, state.uptimeRange);
+        }
       }
     }
 
@@ -1410,9 +1441,15 @@
 
       document.getElementById('sdName').innerText = name;
       const badge = document.getElementById('sdStatusBadge');
+      const dot = document.getElementById('sdStatusDot');
       badge.innerText = statText;
-      badge.className = `service-status-text`;
-      document.getElementById('sdStatusDot').parentElement.parentElement.className = `drawer-title service-card ${cls}`; // hacky way to inherit dot color
+      badge.className = 'service-status-text';
+      badge.style.background = `var(--${cls}-bg)`;
+      badge.style.color = `var(--${cls})`;
+      dot.className = 'status-dot';
+      dot.style.background = `var(--${cls})`;
+      dot.style.color = `var(--${cls})`;
+      dot.style.boxShadow = `0 0 10px var(--${cls}-glow)`;
 
       // Reset
       document.getElementById('sdHistoryBody').innerHTML = '<tr><td colspan="3" style="text-align:center">Loading...</td></tr>';
