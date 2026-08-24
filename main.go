@@ -167,6 +167,9 @@ CREATE TABLE IF NOT EXISTS webhook_configs (
 		log.Fatalf("failed to apply schema: %v", err)
 	}
 
+	// Schema migration for webhook_configs updated_at column
+	_, _ = db.Exec("ALTER TABLE webhook_configs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
+
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
 
@@ -842,33 +845,33 @@ func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 
 		validChannels := map[string]bool{"discord": true, "telegram": true, "gotify": true, "generic": true}
 
-		// Single channel payload: { "channel": "discord", "url": "..." }
-		if ch, ok := req["channel"]; ok {
+		saveChannel := func(ch, rawURL string) error {
 			ch = strings.ToLower(strings.TrimSpace(ch))
 			if !validChannels[ch] {
-				writeError(w, http.StatusBadRequest, "invalid channel: "+ch)
-				return
+				return fmt.Errorf("invalid channel: %s", ch)
 			}
-			url := strings.TrimSpace(req["url"])
+			url := strings.TrimSpace(rawURL)
 			if url == "" {
-				db.Exec("DELETE FROM webhook_configs WHERE channel = ?", ch)
-			} else {
-				db.Exec(`INSERT INTO webhook_configs (channel, url, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-					ON CONFLICT(channel) DO UPDATE SET url = excluded.url, updated_at = CURRENT_TIMESTAMP`, ch, url)
+				_, err := db.Exec("DELETE FROM webhook_configs WHERE channel = ?", ch)
+				return err
+			}
+			_, err := db.Exec(`INSERT INTO webhook_configs (channel, url) VALUES (?, ?)
+				ON CONFLICT(channel) DO UPDATE SET url = excluded.url`, ch, url)
+			return err
+		}
+
+		// Single channel payload: { "channel": "discord", "url": "..." }
+		if ch, ok := req["channel"]; ok {
+			if err := saveChannel(ch, req["url"]); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
 			}
 		} else {
 			// Multi-channel map: { "discord": "...", "telegram": "..." }
 			for ch, rawURL := range req {
-				ch = strings.ToLower(strings.TrimSpace(ch))
-				if !validChannels[ch] {
-					continue
-				}
-				url := strings.TrimSpace(rawURL)
-				if url == "" {
-					db.Exec("DELETE FROM webhook_configs WHERE channel = ?", ch)
-				} else {
-					db.Exec(`INSERT INTO webhook_configs (channel, url, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-						ON CONFLICT(channel) DO UPDATE SET url = excluded.url, updated_at = CURRENT_TIMESTAMP`, ch, url)
+				if err := saveChannel(ch, rawURL); err != nil {
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
 				}
 			}
 		}
