@@ -1,6 +1,7 @@
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:latest
+    build: .
+    image: lantern:latest
     container_name: lantern
     restart: unless-stopped
     ports:
