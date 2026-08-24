@@ -145,6 +145,8 @@ func isInMaintenance(db *sql.DB, name string, t time.Time) bool {
 // parseRange converts a range string to hours.
 func parseRange(rng string) int {
 	switch rng {
+	case "1h":
+		return 1
 	case "24h":
 		return 24
 	case "7d":
@@ -265,12 +267,16 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 		// Generate datapoints
 		var dpInterval time.Duration
 		switch rng {
+		case "1h":
+			dpInterval = 2 * time.Minute
 		case "24h":
-			dpInterval = 1 * time.Hour
+			dpInterval = 30 * time.Minute
+		case "7d":
+			dpInterval = 3 * time.Hour
 		case "30d":
-			dpInterval = 24 * time.Hour
+			dpInterval = 12 * time.Hour
 		default:
-			dpInterval = 6 * time.Hour
+			dpInterval = 3 * time.Hour
 		}
 
 		datapoints := []UptimeDatapoint{}

@@ -55,14 +55,18 @@ type Config struct {
 // loadConfig reads configuration from environment variables and applies defaults.
 func loadConfig() *Config {
 	cfg := &Config{
-		Port:          getEnv("LANTERN_PORT", "7654"),
-		DBPath:        getEnv("LANTERN_DB_PATH", "/data/lantern.db"),
-		RetentionDays: getEnvInt("LANTERN_RETENTION_DAYS", 30),
-		AuthUser:      os.Getenv("LANTERN_AUTH_USER"),
-		AuthPass:      os.Getenv("LANTERN_AUTH_PASS"),
-		StaleHours:    getEnvInt("LANTERN_STALE_HOURS", 2),
-		WebhookURL:    os.Getenv("LANTERN_WEBHOOK_URL"),
-		DemoMode:      os.Getenv("LANTERN_DEMO") == "true",
+		Port:            getEnv("LANTERN_PORT", "7654"),
+		DBPath:          getEnv("LANTERN_DB_PATH", "/data/lantern.db"),
+		RetentionDays:   getEnvInt("LANTERN_RETENTION_DAYS", 30),
+		AuthUser:        os.Getenv("LANTERN_AUTH_USER"),
+		AuthPass:        os.Getenv("LANTERN_AUTH_PASS"),
+		StaleHours:      getEnvInt("LANTERN_STALE_HOURS", 2),
+		WebhookURL:      os.Getenv("LANTERN_WEBHOOK_URL"),
+		DemoMode:        os.Getenv("LANTERN_DEMO") == "true",
+		WebhookDiscord:  os.Getenv("LANTERN_WEBHOOK_DISCORD"),
+		WebhookTelegram: os.Getenv("LANTERN_WEBHOOK_TELEGRAM"),
+		WebhookGotify:   os.Getenv("LANTERN_WEBHOOK_GOTIFY"),
+		WebhookGeneric:  os.Getenv("LANTERN_WEBHOOK_GENERIC"),
 	}
 	// Auth is enabled implicitly when a username is configured.
 	cfg.AuthEnabled = cfg.AuthUser != ""
