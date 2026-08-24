@@ -748,8 +748,8 @@ func computeUptime30d(db *sql.DB, serviceName string) float64 {
 func computeHistoryBuckets(db *sql.DB, name string) []StatusBucket {
 	since := time.Now().UTC().Add(-720 * time.Hour)
 	now := time.Now().UTC()
-	bucketDur := 1 * time.Hour
-	numBuckets := 720
+	bucketDur := (720 * time.Hour) / 30
+	numBuckets := 30
 	buckets := make([]StatusBucket, 0, numBuckets)
 
 	events, err := fetchEvents(db, name, since)
@@ -813,26 +813,26 @@ func computeHistoryBuckets(db *sql.DB, name string) []StatusBucket {
 		}
 
 		dom := "unknown"
-		if statusTime["down"] > 0 {
-			dom = "down"
-		} else if statusTime["degraded"] > 0 {
-			dom = "degraded"
-		} else if statusTime["maintenance"] > 0 {
-			dom = "maintenance"
-		} else if statusTime["up"] > 0 {
-			dom = "up"
+		maxT := -1.0
+		for st, t := range statusTime {
+			if t > maxT {
+				maxT = t
+				dom = st
+			}
 		}
-
-		if dom != "up" && dom != "unknown" && isInMaintenance(db, name, bStart) {
+		if maxT <= 0 {
+			dom = "unknown"
+		} else if dom != "up" && isInMaintenance(db, name, bStart) {
 			dom = "maintenance"
+		} else if dom == "degraded" {
+			// keep degraded
 		}
-
 		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
 	}
 	return buckets
 }
 
-// computeServiceMetricsUnified computes 7d uptime, 30d uptime, and 720 hourly status buckets (30 days x 24h)
+// computeServiceMetricsUnified computes 7d uptime, 30d uptime, and 30-day daily status buckets
 // in a single pass over 30 days of data, reducing redundant SQL queries and heap allocations by ~70%.
 func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
 	now := time.Now().UTC()
@@ -906,8 +906,8 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		pct7d = 0
 	}
 
-	numBuckets := 720
-	bucketDur := 1 * time.Hour
+	numBuckets := 30
+	bucketDur := (30 * 24 * time.Hour) / time.Duration(numBuckets)
 	buckets := make([]StatusBucket, 0, numBuckets)
 
 	for i := 0; i < numBuckets; i++ {
@@ -960,17 +960,16 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		}
 
 		dom := "unknown"
-		if statusTime["down"] > 0 {
-			dom = "down"
-		} else if statusTime["degraded"] > 0 {
-			dom = "degraded"
-		} else if statusTime["maintenance"] > 0 {
-			dom = "maintenance"
-		} else if statusTime["up"] > 0 {
-			dom = "up"
+		maxT := -1.0
+		for st, t := range statusTime {
+			if t > maxT {
+				maxT = t
+				dom = st
+			}
 		}
-
-		if dom != "up" && dom != "unknown" && isInMaintenance(db, serviceName, bStart) {
+		if maxT <= 0 {
+			dom = "unknown"
+		} else if dom != "up" && isInMaintenance(db, serviceName, bStart) {
 			dom = "maintenance"
 		}
 
