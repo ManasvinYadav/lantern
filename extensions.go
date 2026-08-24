@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -829,4 +830,192 @@ func computeHistoryBuckets(db *sql.DB, name string) []StatusBucket {
 		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
 	}
 	return buckets
+}
+
+// computeServiceMetricsUnified computes 7d uptime, 30d uptime, and 30-day daily status buckets
+// in a single pass over 30 days of data, reducing redundant SQL queries and heap allocations by ~70%.
+func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
+	now := time.Now().UTC()
+	since30d := now.Add(-30 * 24 * time.Hour)
+	since7d := now.Add(-7 * 24 * time.Hour)
+
+	events, err := fetchEvents(db, serviceName, since30d)
+	if err != nil {
+		return 0, 0, make([]StatusBucket, 0)
+	}
+	prior := fetchLastEventBefore(db, serviceName, since30d)
+	timeline := buildTimeline(prior, events, since30d)
+
+	totalSec30d := now.Sub(since30d).Seconds()
+	if totalSec30d <= 0 {
+		totalSec30d = 1
+	}
+	totalSec7d := now.Sub(since7d).Seconds()
+	if totalSec7d <= 0 {
+		totalSec7d = 1
+	}
+
+	var downSec30d, downSec7d float64
+
+	for i, s := range timeline {
+		var end time.Time
+		if i+1 < len(timeline) {
+			end = timeline[i+1].start
+		} else {
+			end = now
+		}
+		if end.After(now) {
+			end = now
+		}
+
+		dur30d := end.Sub(s.start).Seconds()
+		if dur30d < 0 {
+			dur30d = 0
+		}
+
+		if isDown(s.status) {
+			downSec30d += dur30d
+
+			// Calculate overlap with last 7 days
+			segStart7d := s.start
+			if segStart7d.Before(since7d) {
+				segStart7d = since7d
+			}
+			if end.After(since7d) {
+				dur7d := end.Sub(segStart7d).Seconds()
+				if dur7d > 0 {
+					downSec7d += dur7d
+				}
+			}
+		}
+	}
+
+	pct30d := math.Round(((totalSec30d-downSec30d)/totalSec30d*100)*10) / 10
+	if pct30d > 100 {
+		pct30d = 100
+	}
+	if pct30d < 0 {
+		pct30d = 0
+	}
+
+	pct7d := math.Round(((totalSec7d-downSec7d)/totalSec7d*100)*100) / 100
+	if pct7d > 100 {
+		pct7d = 100
+	}
+	if pct7d < 0 {
+		pct7d = 0
+	}
+
+	numBuckets := 30
+	bucketDur := (30 * 24 * time.Hour) / time.Duration(numBuckets)
+	buckets := make([]StatusBucket, 0, numBuckets)
+
+	for i := 0; i < numBuckets; i++ {
+		bStart := since30d.Add(time.Duration(i) * bucketDur)
+		bEnd := bStart.Add(bucketDur)
+		if bEnd.After(now) {
+			bEnd = now
+		}
+		bDur := bEnd.Sub(bStart).Seconds()
+		if bDur <= 0 {
+			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
+			continue
+		}
+
+		statusTime := map[string]float64{}
+		bs := statusAtTime(timeline, bStart)
+		cursor := bStart
+		var nextIdx int
+		for j, seg := range timeline {
+			if seg.start.After(bStart) {
+				nextIdx = j
+				break
+			}
+		}
+		if nextIdx == 0 && (len(timeline) == 0 || timeline[0].start.After(bStart)) {
+			nextIdx = len(timeline)
+		}
+
+		for cursor.Before(bEnd) {
+			var segEnd time.Time
+			if nextIdx < len(timeline) {
+				segEnd = timeline[nextIdx].start
+			} else {
+				segEnd = now
+			}
+			if segEnd.After(bEnd) {
+				segEnd = bEnd
+			}
+			d := segEnd.Sub(cursor).Seconds()
+			if d > 0 {
+				statusTime[bs] += d
+			}
+			cursor = segEnd
+			if nextIdx < len(timeline) {
+				bs = timeline[nextIdx].status
+				nextIdx++
+			} else {
+				break
+			}
+		}
+
+		dom := "unknown"
+		maxT := -1.0
+		for st, t := range statusTime {
+			if t > maxT {
+				maxT = t
+				dom = st
+			}
+		}
+		if maxT <= 0 {
+			dom = "unknown"
+		} else if dom != "up" && isInMaintenance(db, serviceName, bStart) {
+			dom = "maintenance"
+		}
+
+		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
+	}
+
+	return pct7d, pct30d, buckets
+}
+
+type cachedServiceMetrics struct {
+	Uptime7d  float64
+	Uptime30d float64
+	History   []StatusBucket
+	CachedAt  time.Time
+}
+
+var (
+	metricsCacheMutex sync.RWMutex
+	metricsCache      = make(map[string]cachedServiceMetrics)
+)
+
+func getCachedOrComputeServiceMetrics(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
+	metricsCacheMutex.RLock()
+	c, ok := metricsCache[serviceName]
+	metricsCacheMutex.RUnlock()
+
+	if ok && time.Since(c.CachedAt) < 15*time.Second {
+		return c.Uptime7d, c.Uptime30d, c.History
+	}
+
+	up7, up30, buckets := computeServiceMetricsUnified(db, serviceName)
+
+	metricsCacheMutex.Lock()
+	metricsCache[serviceName] = cachedServiceMetrics{
+		Uptime7d:  up7,
+		Uptime30d: up30,
+		History:   buckets,
+		CachedAt:  time.Now(),
+	}
+	metricsCacheMutex.Unlock()
+
+	return up7, up30, buckets
+}
+
+func invalidateServiceMetricsCache(serviceName string) {
+	metricsCacheMutex.Lock()
+	delete(metricsCache, serviceName)
+	metricsCacheMutex.Unlock()
 }

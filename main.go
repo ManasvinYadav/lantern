@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"sync"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	_ "modernc.org/sqlite"
@@ -120,6 +123,12 @@ CREATE TABLE IF NOT EXISTS status_events (
 
 CREATE INDEX IF NOT EXISTS idx_status_service
     ON status_events(service_name, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_status_events_service_id
+    ON status_events(service_name, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_status_events_service_ts
+    ON status_events(service_name, timestamp ASC);
 
 CREATE TABLE IF NOT EXISTS diagnostic_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -507,6 +516,8 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 			go dispatchWebhooks(db, cfg, req.ServiceName, lastStatus, req.Status, req.Message)
 		}
 
+		invalidateServiceMetricsCache(req.ServiceName)
+
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
 }
@@ -556,23 +567,27 @@ ORDER BY s.service_name ASC;`)
 				s.Maintenance = true
 			}
 
-			// Compute real uptime from status_events
-			up7 := computeUptime7d(db, s.ServiceName)
-			s.Uptime7d = up7
-			up30 := computeUptime30d(db, s.ServiceName)
-			s.Uptime30d = up30
-			s.UptimePercent = up30
-			s.History = computeHistoryBuckets(db, s.ServiceName)
-			if s.History == nil {
-				s.History = make([]StatusBucket, 0)
-			}
-
 			services = append(services, s)
 		}
 
 		if err := rows.Err(); err != nil {
 			log.Printf("handleGetServices rows error: %v", err)
 		}
+
+		// Compute metrics concurrently across services using cached/unified pass
+		var wg sync.WaitGroup
+		for i := range services {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				up7, up30, buckets := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
+				services[idx].Uptime7d = up7
+				services[idx].Uptime30d = up30
+				services[idx].UptimePercent = up30
+				services[idx].History = buckets
+			}(i)
+		}
+		wg.Wait()
 
 		writeJSON(w, http.StatusOK, services)
 	}
@@ -1082,8 +1097,55 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 		AllowCredentials: false,
 	})
 
-	// --- Auth middleware wraps everything ---
-	return authMiddleware(db, cfg, c.Handler(r))
+	// --- Auth and Gzip compression wrap everything ---
+	return gzipMiddleware(authMiddleware(db, cfg, c.Handler(r)))
+}
+
+var gzipWriterPool = sync.Pool{
+	New: func() interface{} {
+		return gzip.NewWriter(io.Discard)
+	},
+}
+
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.Header().Del("Content-Length")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.ResponseWriter.WriteHeader(http.StatusOK)
+		w.wroteHeader = true
+	}
+	return w.Writer.Write(b)
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.Header().Del("Content-Length")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.ResponseWriter.WriteHeader(code)
+		w.wroteHeader = true
+	}
+}
+
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz := gzipWriterPool.Get().(*gzip.Writer)
+		defer gzipWriterPool.Put(gz)
+		gz.Reset(w)
+		defer gz.Close()
+
+		gzw := &gzipResponseWriter{Writer: gz, ResponseWriter: w}
+		next.ServeHTTP(gzw, r)
+	})
 }
 
 // ---------------------------------------------------------------------------

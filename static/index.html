@@ -330,14 +330,20 @@
       border-radius: var(--radius-md);
       padding: 20px;
       
-      transition: all 0.2s;
+      contain: layout style;
+      content-visibility: auto;
+      contain-intrinsic-size: 0 160px;
+      transform: translateZ(0);
+      backface-visibility: hidden;
+      will-change: transform, border-color, box-shadow;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease, box-shadow 0.2s ease;
       display: flex;
       flex-direction: column;
       gap: 16px;
       position: relative;
     }
     
-    .service-card:hover { transform: translateY(-2px); border-color: var(--border-focus); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+    .service-card:hover { transform: translateY(-2px) translateZ(0); border-color: var(--border-focus); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
     
     .service-card.up { border-top: 2px solid var(--up); }
     .service-card.down { border-top: 2px solid var(--down); }
@@ -353,22 +359,26 @@
     .status-dot {
       width: 10px; height: 10px; border-radius: 50%;
       position: relative;
+      flex-shrink: 0;
     }
     .status-dot::after {
-      content: ''; position: absolute; top: -4px; left: -4px; right: -4px; bottom: -4px;
+      content: ''; position: absolute; top: -3px; left: -3px; right: -3px; bottom: -3px;
       border-radius: 50%; border: 1px solid currentColor;
-      animation: ripple 2s infinite cubic-bezier(0.15, 0.85, 0.35, 1.2);
+      animation: pulse-ring 2.4s infinite cubic-bezier(0.2, 0.8, 0.4, 1);
       opacity: 0;
+      will-change: transform, opacity;
     }
-    .service-card.up .status-dot { background: var(--up); color: var(--up); box-shadow: 0 0 10px var(--up-glow); }
-    .service-card.down .status-dot { background: var(--down); color: var(--down); box-shadow: 0 0 10px var(--down-glow); }
-    .service-card.degraded .status-dot { background: var(--degraded); color: var(--degraded); box-shadow: 0 0 10px var(--degraded-glow); }
-    .service-card.maintenance .status-dot { background: var(--maint); color: var(--maint); box-shadow: 0 0 10px var(--maint-glow); }
-    .service-card.unknown .status-dot { background: var(--unknown); color: var(--unknown); box-shadow: 0 0 10px var(--unknown-glow); animation: none; }
+    .service-card.up .status-dot { background: var(--up); color: var(--up); box-shadow: 0 0 8px var(--up-glow); }
+    .service-card.down .status-dot { background: var(--down); color: var(--down); box-shadow: 0 0 8px var(--down-glow); }
+    .service-card.degraded .status-dot { background: var(--degraded); color: var(--degraded); box-shadow: 0 0 8px var(--degraded-glow); }
+    .service-card.maintenance .status-dot { background: var(--maint); color: var(--maint); box-shadow: 0 0 8px var(--maint-glow); }
+    .service-card.unknown .status-dot { background: var(--unknown); color: var(--unknown); box-shadow: 0 0 8px var(--unknown-glow); }
+    .service-card.unknown .status-dot::after { animation: none; }
     
-    @keyframes ripple {
-      0% { transform: scale(0.8); opacity: 0.5; }
-      100% { transform: scale(2); opacity: 0; }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.9); opacity: 0.8; }
+      60% { transform: scale(1.6); opacity: 0; }
+      100% { transform: scale(0.9); opacity: 0; }
     }
 
     .service-status-text {
@@ -388,7 +398,7 @@
     .trend-bar { display: flex; gap: 2px; height: 28px; align-items: flex-end; }
     .trend-block {
       flex: 1; min-width: 0; background: var(--panel-hover); border-radius: 2px;
-      transition: height 0.3s ease, background 0.3s ease; height: 100%;
+      transition: height 0.25s ease, background 0.25s ease; height: 100%;
       cursor: crosshair;
     }
     .trend-block:hover { filter: brightness(1.2); }
@@ -406,19 +416,25 @@
     .drawer-overlay {
       position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); 
       z-index: 1000; display: flex; justify-content: flex-end;
-      opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
+      opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+      backdrop-filter: blur(4px);
     }
     .drawer-overlay.open { opacity: 1; pointer-events: auto; }
 
     .drawer {
       width: 600px; max-width: 100vw; height: 100vh;
-      background: rgba(17, 24, 39, 0.95); 
+      background: rgba(17, 24, 39, 0.96); 
       border-left: 1px solid var(--border);
       display: flex; flex-direction: column;
-      transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      transform: translate3d(100%, 0, 0); 
+      transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
       box-shadow: -10px 0 40px rgba(0,0,0,0.5);
+      will-change: transform;
+      backface-visibility: hidden;
     }
-    .drawer-overlay.open .drawer { transform: translateX(0); }
+    .drawer-overlay.open .drawer {
+      transform: translate3d(0, 0, 0);
+    }
 
     .drawer-header {
       padding: 24px; border-bottom: 1px solid var(--border);
@@ -1181,6 +1197,18 @@
       }, 3200);
     }
 
+    // Polling Manager
+    function startPolling() {
+      stopPolling();
+      state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
+    }
+    function stopPolling() {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
     // Initialization
     document.addEventListener('DOMContentLoaded', () => {
       if (isPublic) document.body.classList.add('is-public');
@@ -1188,7 +1216,17 @@
       bindEvents();
       renderSkeletons();
       loadData();
-      state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
+      startPolling();
+
+      // Pause polling in background tabs to save battery & eliminate stutter
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          stopPolling();
+        } else {
+          loadData();
+          startPolling();
+        }
+      });
     });
 
     function renderSkeletons() {
@@ -1232,16 +1270,21 @@
       btnList.addEventListener('click', () => setView('list'));
       setView(localStorage.getItem('lantern_view') || 'grid');
 
-      // Search Box Events
+      // Search Box Events with requestAnimationFrame
       const searchInput = document.getElementById('serviceSearchInput');
       const searchClearBtn = document.getElementById('searchClearBtn');
+      let searchRaf = null;
       if (searchInput) {
         searchInput.addEventListener('input', (e) => {
-          state.searchQuery = e.target.value.trim().toLowerCase();
+          const val = e.target.value.trim().toLowerCase();
+          state.searchQuery = val;
           if (searchClearBtn) {
-            searchClearBtn.style.display = state.searchQuery ? 'block' : 'none';
+            searchClearBtn.style.display = val ? 'block' : 'none';
           }
-          renderServices();
+          if (searchRaf) cancelAnimationFrame(searchRaf);
+          searchRaf = requestAnimationFrame(() => {
+            renderServices();
+          });
         });
       }
       if (searchClearBtn) {
@@ -1796,11 +1839,9 @@
         <div class="service-header">
           <div class="service-name-group">
             <div class="status-dot"></div>
-            <div>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <div class="service-name">${escapeHtml(s.service_name)}</div>
-                ${groupBadge}
-              </div>
+            <div class="service-title-wrap" style="display:flex; align-items:center; gap:8px;">
+              <div class="service-name">${escapeHtml(s.service_name)}</div>
+              ${groupBadge}
             </div>
           </div>
           <div class="service-status-text">${statText}</div>
@@ -1808,7 +1849,7 @@
         <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
         ${trendHTML}
         <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-           <span style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
+           <span class="service-relative-ts" style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
            <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
         </div>
       `;
@@ -1876,50 +1917,78 @@
 
       filtered.forEach((s, index) => {
         try {
+          const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
+          const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN').toUpperCase();
           let card = existingMap.get(s.service_name);
+
           if (!card) {
             card = document.createElement('div');
+            card.className = 'service-card ' + cls;
+            card.dataset.service = s.service_name;
+
+            let trendHTML = '';
+            if (!isPublic) {
+              let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
+              if (s.history && Array.isArray(s.history)) {
+                blocks = s.history.map(b => {
+                  const bcls = b.status || 'empty';
+                  const date = new Date(b.start).toLocaleDateString();
+                  return `<div class="trend-block ${bcls}" data-tooltip="${date} - ${bcls.toUpperCase()}"></div>`;
+                }).join('');
+              }
+              const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
+              trendHTML = `
+                <div class="trend-container hide-public">
+                   <div class="trend-header">
+                     <span>30-Day History</span>
+                     <span class="uptime-pct-label">${uptimePercent}</span>
+                   </div>
+                   <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
+                      ${blocks}
+                   </div>
+                </div>
+              `;
+            }
+
+            card.innerHTML = buildCardHTML(s, cls, statText, trendHTML);
             grid.appendChild(card);
           } else {
+            // In-place granular updates (no DOM reconstruction = smooth 60fps)
+            const targetClass = 'service-card ' + cls;
+            if (card.className !== targetClass) card.className = targetClass;
+
+            const statBadge = card.querySelector('.service-status-text');
+            if (statBadge && statBadge.innerText !== statText) statBadge.innerText = statText;
+
+            const msgEl = card.querySelector('.service-message');
+            const msgText = s.message || 'No message';
+            if (msgEl && msgEl.innerText !== msgText) {
+              msgEl.innerText = msgText;
+              msgEl.title = msgText;
+            }
+
+            const tsEl = card.querySelector('.service-relative-ts');
+            const relText = relativeTime(s.timestamp);
+            if (tsEl && tsEl.innerText !== relText) tsEl.innerText = relText;
+
+            const titleWrap = card.querySelector('.service-title-wrap');
+            let groupWrap = card.querySelector('.service-group-badge');
+            if (s.group_name) {
+              if (!groupWrap && titleWrap) {
+                const badge = document.createElement('span');
+                badge.className = 'service-group-badge';
+                badge.innerText = s.group_name;
+                titleWrap.appendChild(badge);
+              } else if (groupWrap && groupWrap.innerText !== s.group_name) {
+                groupWrap.innerText = s.group_name;
+              }
+            } else if (groupWrap) {
+              groupWrap.remove();
+            }
+
             if (grid.children[index] !== card) {
               grid.insertBefore(card, grid.children[index]);
             }
-          }
-          
-          const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
-          const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN');
-          
-          let trendHTML = '';
-          if (!isPublic) {
-            let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
-            if (s.history && Array.isArray(s.history)) {
-              blocks = s.history.map(b => {
-                const cls = b.status || 'empty';
-                const date = new Date(b.start).toLocaleDateString();
-                return `<div class="trend-block ${cls}" data-tooltip="${date} - ${cls.toUpperCase()}"></div>`;
-              }).join('');
-            }
-            
-            const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
-            
-            trendHTML = `
-              <div class="trend-container hide-public">
-                 <div class="trend-header">
-                   <span>30-Day History</span>
-                   <span>${uptimePercent}</span>
-                 </div>
-                 <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
-                    ${blocks}
-                 </div>
-              </div>
-            `;
-          }
-
-          const newHTML = buildCardHTML(s, cls, statText, trendHTML);
-          if (card.innerHTML !== newHTML) {
-            card.innerHTML = newHTML;
-            card.className = 'service-card ' + cls;
-            card.dataset.service = s.service_name;
           }
         } catch (err) {
           console.error("Failed to render service:", s.service_name, err);
