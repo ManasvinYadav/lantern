@@ -65,13 +65,6 @@
     :root[data-theme="light"] td {
       border-bottom: 1px solid var(--border);
     }
-    :root[data-theme="light"] .btn.primary {
-      background: #e2e8f0;
-      border-color: #cbd5e1;
-    }
-    :root[data-theme="light"] .btn.primary:hover {
-      background: #cbd5e1;
-    }
     :root[data-theme="light"] .graph-tooltip {
       background: #0f172a;
       color: #f8fafc;
@@ -165,7 +158,9 @@
       overflow-x: hidden;
     }
 
-    a { color: inherit; text-decoration: none; }
+    ::selection { background: var(--accent); color: #ffffff; }
+    a { color: inherit; text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--accent); }
     
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -216,13 +211,49 @@
     .btn:hover { background: var(--panel-hover); border-color: var(--border-focus); }
     .btn:active { transform: scale(0.97); }
     
-    .btn.primary { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); }
-    .btn.primary:hover { background: rgba(255, 255, 255, 0.15); }
+    .btn.primary {
+      background: var(--accent) !important;
+      border-color: var(--accent) !important;
+      color: #ffffff !important;
+    }
+    .btn.primary:hover {
+      filter: brightness(1.1);
+      box-shadow: 0 0 14px var(--accent-glow) !important;
+    }
+    .view-toggle {
+      display: flex;
+      gap: 2px;
+      background: var(--panel-bg);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      padding: 2px;
+    }
+    .view-toggle-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: var(--font-sans);
+      transition: all 0.2s;
+    }
+    .view-toggle-btn:hover {
+      color: var(--text-primary);
+    }
+    .view-toggle-btn.active {
+      background: var(--panel-hover);
+      color: var(--text-primary);
+      border-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
 
     .last-updated { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .loading-pulse {
-      width: 8px; height: 8px; border-radius: 50%; background: var(--up);
-      box-shadow: 0 0 8px var(--up-glow); margin-right: 8px;
+      width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow); margin-right: 8px;
       animation: pulse 2s infinite;
     }
     .loading-pulse.loading { background: var(--text-secondary); box-shadow: none; animation: none; }
@@ -257,8 +288,8 @@
     }
     .metric-card::before {
       content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px;
-      background: linear-gradient(90deg, transparent, var(--border-focus), transparent);
-      opacity: 0.5;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.8;
     }
 
     .metric-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -278,8 +309,13 @@
       background: var(--panel-bg); color: var(--text-secondary); border: 1px solid var(--border);
       transition: all 0.2s;
     }
-    .filter-pill:hover { background: var(--panel-hover); color: var(--text-primary); }
-    .filter-pill.active { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
+    .filter-pill:hover { background: var(--panel-hover); color: var(--text-primary); border-color: var(--accent); }
+    .filter-pill.active {
+      background: var(--accent) !important;
+      color: #ffffff !important;
+      border-color: var(--accent) !important;
+      box-shadow: 0 0 12px var(--accent-glow) !important;
+    }
 
     .services-grid {
       display: grid;
@@ -410,20 +446,21 @@
     .diag-run-info { display: flex; flex-direction: column; gap: 4px; }
     .diag-run-title { font-size: 14px; font-weight: 500; color: var(--text-primary); }
     .diag-run-meta { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
-    .diag-run-service { background: var(--panel-hover); padding: 2px 6px; border-radius: 4px; color: var(--text-secondary); font-size: 11px; }
+    .diag-run-service { background: var(--accent-glow); color: var(--accent); font-weight: 500; }
     
     .diag-run-body {
       display: none; border-top: 1px solid var(--border); padding: 16px; background: rgba(0,0,0,0.2);
       position: relative;
     }
+    .diag-run-card.open { border-color: var(--accent); }
     .diag-run-card.open .diag-run-body { display: block; }
     
     .diag-copy-btn {
       position: absolute; top: 16px; right: 16px; padding: 4px 8px; font-size: 11px;
       background: var(--panel-hover); border: 1px solid var(--border); border-radius: 4px;
-      color: var(--text-secondary); cursor: pointer; 
+      color: var(--text-secondary); cursor: pointer; transition: all 0.2s;
     }
-    .diag-copy-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+    .diag-copy-btn:hover { background: var(--panel-hover); border-color: var(--accent); color: var(--accent); }
     
     .diag-log-block {
       font-family: var(--font-mono); font-size: 12px; color: #a1a1aa; white-space: pre-wrap;
@@ -461,13 +498,14 @@
       background: var(--panel-hover);
     }
     .uptime-range-btn.active {
-      background: var(--panel-hover);
-      color: var(--text-primary);
+      background: var(--accent) !important;
+      color: #ffffff !important;
       font-weight: 600;
+      box-shadow: 0 0 8px var(--accent-glow);
     }
     :root[data-theme="light"] .uptime-range-btn.active {
-      background: #0f172a;
-      color: #ffffff;
+      background: var(--accent) !important;
+      color: #ffffff !important;
     }
 
     .svg-container { position: relative; width: 100%; height: 180px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
@@ -605,9 +643,9 @@
         <div class="header-subtitle">Service Status & Diagnostics</div>
       </div>
       <div class="header-right">
-        <div class="view-toggle" style="display:flex; gap:2px; background:var(--panel-bg); border-radius:var(--radius-sm); border:1px solid var(--border); padding:2px;">
-          <button id="btnGrid" style="background:var(--panel-hover); border:none; color:var(--text-primary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">Grid</button>
-          <button id="btnList" style="background:transparent; border:none; color:var(--text-secondary); padding:4px 8px; border-radius:4px; cursor:pointer; font-size:12px;">List</button>
+        <div class="view-toggle">
+          <button id="btnGrid" class="view-toggle-btn active">Grid</button>
+          <button id="btnList" class="view-toggle-btn">List</button>
         </div>
         <span class="last-updated" id="lastUpdated">Updating...</span>
         <button class="btn hide-public" id="btnDiagnostics">
@@ -890,16 +928,12 @@
     function setView(view) {
       if (view === 'list') {
         gridEl.classList.add('list-view');
-        btnList.style.background = 'var(--panel-hover)';
-        btnList.style.color = 'var(--text-primary)';
-        btnGrid.style.background = 'transparent';
-        btnGrid.style.color = 'var(--text-secondary)';
+        btnList.classList.add('active');
+        btnGrid.classList.remove('active');
       } else {
         gridEl.classList.remove('list-view');
-        btnGrid.style.background = 'var(--panel-hover)';
-        btnGrid.style.color = 'var(--text-primary)';
-        btnList.style.background = 'transparent';
-        btnList.style.color = 'var(--text-secondary)';
+        btnGrid.classList.add('active');
+        btnList.classList.remove('active');
       }
       localStorage.setItem('lantern_view', view);
     }
@@ -945,6 +979,14 @@
         localStorage.setItem('lantern_accent', color);
         if (hexDisp) hexDisp.innerText = color;
         if (picker) picker.value = color;
+      }
+
+      if (state.services && state.services.length > 0) {
+        updateMetrics();
+      }
+
+      if (state.activeService && state.lastUptimeDatapoints) {
+        renderGraph(state.lastUptimeDatapoints, state.uptimeRange);
       }
     }
 
@@ -1228,7 +1270,7 @@
       
       if (activeIncidents === 0) {
         statEl.innerText = 'All Systems Operational';
-        statEl.style.color = 'var(--up)';
+        statEl.style.color = 'var(--accent, var(--up))';
         statSubEl.innerText = 'No active incidents detected';
       } else {
         statEl.innerText = 'Service Disruption';
@@ -1445,6 +1487,7 @@
         const res = await fetch(API.uptime(name, range));
         if (res.ok) {
           const d = await res.json();
+          state.lastUptimeDatapoints = d.datapoints;
           renderGraph(d.datapoints, range);
         } else {
           svg.innerHTML = '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--down)" font-size="12">Failed to load uptime</text>';
@@ -1468,7 +1511,7 @@
        if (datapoints.length === 1) {
            const y = h - (datapoints[0].uptime_pct / 100 * (h - 24)) - 12;
            svg.innerHTML = `
-             <line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="var(--up)" stroke-width="2" />
+             <line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="var(--accent, var(--up))" stroke-width="2" />
            `;
            return;
        }
@@ -1487,12 +1530,12 @@
        svg.innerHTML = `
          <defs>
            <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-             <stop offset="0%" stop-color="var(--up)" stop-opacity="0.3" />
-             <stop offset="100%" stop-color="var(--up)" stop-opacity="0" />
+             <stop offset="0%" stop-color="var(--accent, var(--up))" stop-opacity="0.3" />
+             <stop offset="100%" stop-color="var(--accent, var(--up))" stop-opacity="0" />
            </linearGradient>
          </defs>
          <path d="${areaD}" fill="url(#areaGrad)" />
-         <path d="${pathD}" fill="none" stroke="var(--up)" stroke-width="2" />
+         <path d="${pathD}" fill="none" stroke="var(--accent, var(--up))" stroke-width="2" />
        `;
        
        // Interactive dots
