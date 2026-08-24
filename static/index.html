@@ -495,55 +495,8 @@
     }
 
     /* =====================================================================
-       Settings Modal & Accent Customization
+       Settings Drawer & Accent Customization
        ===================================================================== */
-    .settings-dialog {
-      background: var(--panel-bg);
-      width: 560px;
-      max-width: 95vw;
-      max-height: 90vh;
-      border-radius: var(--radius-md);
-      border: 1px solid var(--border);
-      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    :root[data-theme="light"] .settings-dialog {
-      box-shadow: 0 20px 50px rgba(0,0,0,0.15);
-    }
-    .settings-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--border);
-      background: var(--panel-hover);
-    }
-    .settings-body {
-      padding: 20px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-    .settings-section {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .settings-section-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-primary);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--border);
-    }
     .form-group {
       display: flex;
       flex-direction: column;
@@ -572,6 +525,22 @@
     .form-input:focus {
       border-color: var(--accent, var(--border-focus));
     }
+    .theme-btn {
+      flex: 1; justify-content: center; text-align: center;
+      transition: all 0.2s;
+    }
+    .theme-btn.active {
+      background: var(--panel-hover);
+      border-color: var(--accent, var(--border-focus));
+      color: var(--text-primary);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    :root[data-theme="light"] .theme-btn.active {
+      background: #e2e8f0;
+      border-color: var(--accent, #94a3b8);
+      color: var(--text-primary);
+    }
+
     .swatch-group {
       display: flex;
       gap: 8px;
@@ -744,61 +713,53 @@
     </div>
   </div>
 
-  
-  <!-- Settings Modal -->
-  <div class="drawer-overlay hide-public hidden" id="settingsModal" style="justify-content:center; align-items:center;">
-    <div class="settings-dialog">
-      <div class="settings-header">
-        <div style="display:flex; align-items:center; gap:8px; font-weight:600; font-size:16px;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+  <!-- Settings Drawer -->
+  <div class="drawer-overlay hide-public" id="settingsDrawerOverlay">
+    <div class="drawer" id="settingsDrawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-secondary)"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           Dashboard Settings
         </div>
-        <button id="settingsClose" class="drawer-close">✕</button>
+        <button class="drawer-close" id="settingsClose">✕</button>
       </div>
-      <div class="settings-body">
-        <!-- Appearance Section -->
-        <div class="settings-section">
-          <div class="settings-section-title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
-            Appearance
-          </div>
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
-            <div class="form-group">
-              <label class="form-label" for="settingsThemeSelect">Theme Mode</label>
-              <select id="settingsThemeSelect" class="form-input">
-                <option value="dark">Dark</option>
-                <option value="midnight">Midnight</option>
-                <option value="light">Light</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">
-                <span>Accent Color</span>
-                <span id="accentHexDisplay" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);"></span>
-              </label>
-              <div class="swatch-group">
-                <button class="swatch-btn" data-color="#10b981" style="background:#10b981;" title="Emerald"></button>
-                <button class="swatch-btn" data-color="#3b82f6" style="background:#3b82f6;" title="Blue"></button>
-                <button class="swatch-btn" data-color="#8b5cf6" style="background:#8b5cf6;" title="Violet"></button>
-                <button class="swatch-btn" data-color="#ec4899" style="background:#ec4899;" title="Rose"></button>
-                <button class="swatch-btn" data-color="#f59e0b" style="background:#f59e0b;" title="Amber"></button>
-                <button class="swatch-btn" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></button>
-                <input type="color" id="accentPicker" style="width:26px; height:26px; padding:0; border:none; border-radius:50%; background:transparent; cursor:pointer;" title="Custom Color" />
-                <button class="btn" id="btnResetAccent" style="padding:2px 6px; font-size:11px;" title="Reset to default">Reset</button>
-              </div>
-            </div>
+      <div class="drawer-body">
+        <!-- Theme Mode Section -->
+        <div>
+          <div class="section-label">Theme Mode</div>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn theme-btn" data-theme-val="dark" style="flex:1; justify-content:center;">Dark</button>
+            <button type="button" class="btn theme-btn" data-theme-val="midnight" style="flex:1; justify-content:center;">Midnight</button>
+            <button type="button" class="btn theme-btn" data-theme-val="light" style="flex:1; justify-content:center;">Light</button>
           </div>
         </div>
 
-        <!-- Webhooks Section -->
-        <div class="settings-section">
-          <div class="settings-section-title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
-            Webhook Alert Integrations
+        <!-- Accent Color Section -->
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="section-label" style="margin-bottom:0;">Accent Color</div>
+            <span id="accentHexDisplay" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Default</span>
           </div>
-          <div style="font-size:12px; color:var(--text-muted); margin-top:-4px;">Configure URLs for status change notifications. Saved URLs override environment variables.</div>
+          <div class="swatch-group" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:14px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-sm);">
+            <button type="button" class="swatch-btn" data-color="#10b981" style="background:#10b981;" title="Emerald"></button>
+            <button type="button" class="swatch-btn" data-color="#3b82f6" style="background:#3b82f6;" title="Blue"></button>
+            <button type="button" class="swatch-btn" data-color="#8b5cf6" style="background:#8b5cf6;" title="Violet"></button>
+            <button type="button" class="swatch-btn" data-color="#ec4899" style="background:#ec4899;" title="Rose"></button>
+            <button type="button" class="swatch-btn" data-color="#f59e0b" style="background:#f59e0b;" title="Amber"></button>
+            <button type="button" class="swatch-btn" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></button>
+            <label style="position:relative; width:26px; height:26px; border-radius:50%; overflow:hidden; border:2px solid var(--border); cursor:pointer; display:inline-block;" title="Custom Color">
+              <input type="color" id="accentPicker" style="position:absolute; top:-10px; left:-10px; width:50px; height:50px; padding:0; border:none; cursor:pointer;" />
+            </label>
+            <button type="button" class="btn" id="btnResetAccent" style="padding:3px 8px; font-size:11px; margin-left:auto;">Reset</button>
+          </div>
+        </div>
 
-          <div style="display:flex; flex-direction:column; gap:12px; margin-top:8px;">
+        <!-- Webhook Alert Integrations Section -->
+        <div>
+          <div class="section-label">Webhook Alert Integrations</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:-6px; margin-bottom:14px;">Configure URLs for status change notifications. Saved URLs persist to DB and override environment variables.</div>
+
+          <div style="display:flex; flex-direction:column; gap:14px;">
             <div class="form-group">
               <div class="form-label">
                 <span>Discord Webhook</span>
@@ -832,19 +793,16 @@
             </div>
           </div>
 
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-            <span id="webhookSaveStatus" style="font-size:12px; color:var(--up);"></span>
-            <button class="btn primary" id="btnSaveWebhooks">Save Webhooks</button>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px;">
+            <span id="webhookSaveStatus" style="font-size:12px; font-weight:500;"></span>
+            <button type="button" class="btn primary" id="btnSaveWebhooks">Save Webhooks</button>
           </div>
         </div>
 
-        <!-- Webhook Test Section -->
-        <div class="settings-section" style="border-top: 1px solid var(--border); padding-top: 16px;">
-          <div class="settings-section-title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-            Send Test Webhook
-          </div>
-          <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+        <!-- Send Test Webhook Section -->
+        <div style="padding-top:16px; border-top:1px solid var(--border);">
+          <div class="section-label">Send Test Webhook</div>
+          <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
             <select id="webhookTarget" class="form-input" style="flex:1;">
               <option value="all">All Configured Channels</option>
               <option value="discord">Discord</option>
@@ -852,14 +810,14 @@
               <option value="gotify">Gotify</option>
               <option value="generic">Generic</option>
             </select>
-            <button class="btn" id="btnTestWebhook" style="white-space:nowrap;">Send Test</button>
+            <button type="button" class="btn" id="btnTestWebhook" style="white-space:nowrap;">Send Test</button>
           </div>
-          <div id="webhookTestResult" style="font-size:12px; color:var(--text-secondary); white-space:pre-wrap; max-height:120px; overflow-y:auto; font-family:var(--font-mono); margin-top:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px;"></div>
+          <div id="webhookTestResult" style="font-size:12px; color:var(--text-secondary); white-space:pre-wrap; max-height:140px; overflow-y:auto; font-family:var(--font-mono); margin-top:10px; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; min-height:36px;"></div>
         </div>
-
       </div>
     </div>
   </div>
+
   <!-- Diagnostics Drawer -->
   <div class="drawer-overlay hide-public" id="diagDrawerOverlay" class="drawer-overlay hide-public hidden">
     <div class="drawer" id="diagDrawer">
@@ -953,8 +911,13 @@
     function setTheme(theme) {
       document.documentElement.setAttribute('data-theme', theme);
       localStorage.setItem('lantern_theme', theme);
-      const sel = document.getElementById('settingsThemeSelect');
-      if (sel) sel.value = theme;
+      document.querySelectorAll('.theme-btn').forEach(b => {
+        if (b.dataset.themeVal === theme) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
     }
 
     function setAccentColor(color) {
@@ -962,9 +925,11 @@
       const picker = document.getElementById('accentPicker');
       document.querySelectorAll('.swatch-btn').forEach(btn => {
         if (color && btn.dataset.color.toLowerCase() === color.toLowerCase()) {
-          btn.classList.add('active');
+          btn.style.borderColor = 'var(--text-primary)';
+          btn.style.transform = 'scale(1.18)';
         } else {
-          btn.classList.remove('active');
+          btn.style.borderColor = 'transparent';
+          btn.style.transform = 'none';
         }
       });
 
@@ -983,25 +948,15 @@
       }
     }
 
-    // Settings Modal
-    const settingsModal = document.getElementById('settingsModal');
-
-    function openSettingsModal() {
-      if (!settingsModal) return;
-      settingsModal.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
-      const curTheme = localStorage.getItem('lantern_theme') || 'dark';
-      const themeSel = document.getElementById('settingsThemeSelect');
-      if (themeSel) themeSel.value = curTheme;
-      const curAccent = localStorage.getItem('lantern_accent');
-      setAccentColor(curAccent || null);
+    function openSettings() {
+      openDrawer('settingsDrawerOverlay');
+      setTheme(localStorage.getItem('lantern_theme') || 'dark');
+      setAccentColor(localStorage.getItem('lantern_accent') || null);
       loadWebhookSettings();
     }
 
-    function closeSettingsModal() {
-      if (!settingsModal) return;
-      settingsModal.classList.add('hidden');
-      document.body.style.overflow = '';
+    function closeSettings() {
+      closeDrawer('settingsDrawerOverlay');
     }
 
     async function loadWebhookSettings() {
@@ -1115,37 +1070,34 @@
     }
 
     // Settings Event Bindings
-    const btnSettings = document.getElementById('btnSettings');
-    if (btnSettings) btnSettings.addEventListener('click', openSettingsModal);
-    const settingsClose = document.getElementById('settingsClose');
-    if (settingsClose) settingsClose.addEventListener('click', closeSettingsModal);
+    if (!isPublic) {
+      const btnSettings = document.getElementById('btnSettings');
+      if (btnSettings) btnSettings.addEventListener('click', openSettings);
+      const settingsClose = document.getElementById('settingsClose');
+      if (settingsClose) settingsClose.addEventListener('click', closeSettings);
 
-    const themeSelect = document.getElementById('settingsThemeSelect');
-    if (themeSelect) themeSelect.addEventListener('change', (e) => setTheme(e.target.value));
-
-    document.querySelectorAll('.swatch-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => setAccentColor(e.target.dataset.color));
-    });
-
-    const accentPicker = document.getElementById('accentPicker');
-    if (accentPicker) {
-      accentPicker.addEventListener('input', (e) => setAccentColor(e.target.value));
-    }
-    const btnResetAccent = document.getElementById('btnResetAccent');
-    if (btnResetAccent) {
-      btnResetAccent.addEventListener('click', () => setAccentColor(null));
-    }
-
-    const btnSaveWebhooks = document.getElementById('btnSaveWebhooks');
-    if (btnSaveWebhooks) btnSaveWebhooks.addEventListener('click', saveWebhookSettings);
-
-    const btnTestWebhook = document.getElementById('btnTestWebhook');
-    if (btnTestWebhook) btnTestWebhook.addEventListener('click', testWebhookChannel);
-
-    if (settingsModal) {
-      settingsModal.addEventListener('click', (e) => {
-        if (e.target === settingsModal) closeSettingsModal();
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => setTheme(e.currentTarget.dataset.themeVal));
       });
+
+      document.querySelectorAll('.swatch-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => setAccentColor(e.currentTarget.dataset.color));
+      });
+
+      const accentPicker = document.getElementById('accentPicker');
+      if (accentPicker) {
+        accentPicker.addEventListener('input', (e) => setAccentColor(e.target.value));
+      }
+      const btnResetAccent = document.getElementById('btnResetAccent');
+      if (btnResetAccent) {
+        btnResetAccent.addEventListener('click', () => setAccentColor(null));
+      }
+
+      const btnSaveWebhooks = document.getElementById('btnSaveWebhooks');
+      if (btnSaveWebhooks) btnSaveWebhooks.addEventListener('click', saveWebhookSettings);
+
+      const btnTestWebhook = document.getElementById('btnTestWebhook');
+      if (btnTestWebhook) btnTestWebhook.addEventListener('click', testWebhookChannel);
     }
 
     setTheme(localStorage.getItem('lantern_theme') || 'dark');
@@ -1195,7 +1147,7 @@
         if(e.key === 'Escape') {
           closeDrawer('serviceDrawerOverlay');
           closeDrawer('diagDrawerOverlay');
-          closeSettingsModal();
+          closeDrawer('settingsDrawerOverlay');
         }
       });
 
