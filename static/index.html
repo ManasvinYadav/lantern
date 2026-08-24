@@ -1299,9 +1299,12 @@
       const statEl = document.getElementById('metricStatus');
       const statSubEl = document.getElementById('metricStatusSub');
       
+      // NOTE: Metric card value text ("All Systems Operational", "100.00%") is intentionally kept white (var(--text-primary)),
+      // matching the overall dashboard aesthetic. The card containers/border accents follow the theme accent,
+      // but metric value texts remain white unless an active incident/disruption occurs (var(--down)).
       if (activeIncidents === 0) {
         statEl.innerText = 'All Systems Operational';
-        statEl.style.color = 'var(--accent, var(--up))';
+        statEl.style.color = 'var(--text-primary)';
         statSubEl.innerText = 'No active incidents detected';
       } else {
         statEl.innerText = 'Service Disruption';
