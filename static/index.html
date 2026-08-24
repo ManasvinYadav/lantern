@@ -433,6 +433,40 @@
        ===================================================================== */
     .section-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
     
+    .uptime-range-tabs {
+      display: flex;
+      gap: 2px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 2px;
+    }
+    .uptime-range-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      font-family: var(--font-sans);
+      transition: all 0.2s;
+    }
+    .uptime-range-btn:hover {
+      color: var(--text-primary);
+      background: var(--panel-hover);
+    }
+    .uptime-range-btn.active {
+      background: var(--panel-hover);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    :root[data-theme="light"] .uptime-range-btn.active {
+      background: #0f172a;
+      color: #ffffff;
+    }
+
     .svg-container { position: relative; width: 100%; height: 180px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
     .svg-container svg { width: 100%; height: 100%; }
     .graph-tooltip { position: absolute; background: #111827; border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10;  white-space: pre;}
@@ -551,7 +585,15 @@
         </div>
         
         <div>
-          <div class="section-label">Uptime Trend (30 Days)</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div class="section-label" id="uptimeSectionLabel" style="margin-bottom: 0;">Uptime Trend (30 Days)</div>
+            <div class="uptime-range-tabs" id="uptimeRangeTabs">
+              <button class="uptime-range-btn" data-range="1h">1h</button>
+              <button class="uptime-range-btn" data-range="24h">24h</button>
+              <button class="uptime-range-btn" data-range="7d">7d</button>
+              <button class="uptime-range-btn active" data-range="30d">30d</button>
+            </div>
+          </div>
           <div class="svg-container">
             <div class="graph-tooltip" id="graphTooltip"></div>
             <svg id="uptimeSvg"></svg>
@@ -637,6 +679,7 @@
       strips: {},
       diagFilter: '',
       activeService: null,
+      uptimeRange: '30d',
       timer: null
     };
 
@@ -648,7 +691,7 @@
       diagnostic: (id) => `/api/diagnostics/${id}`,
       strip: (name) => `/api/services/${encodeURIComponent(name)}/strip`,
       maintenance: (name) => `/api/services/${encodeURIComponent(name)}/maintenance`,
-      uptime: (name) => isPublic ? `/api/public/services/${encodeURIComponent(name)}/uptime?range=30d` : `/api/services/${encodeURIComponent(name)}/uptime?range=30d`,
+      uptime: (name, range = '30d') => isPublic ? `/api/public/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}` : `/api/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}`,
       incidents: (name) => `/api/services/${encodeURIComponent(name)}/incidents?range=30d`
     };
 
@@ -772,6 +815,19 @@
           e.target.classList.add('active');
           state.filter = e.target.dataset.filter;
           renderServices();
+        });
+      });
+
+      // Uptime Range Selector Tabs
+      document.querySelectorAll('#uptimeRangeTabs .uptime-range-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const range = e.target.dataset.range;
+          if (!range) return;
+          state.uptimeRange = range;
+          updateUptimeRangeTabs(range);
+          if (state.activeService) {
+            loadServiceUptime(state.activeService, range);
+          }
         });
       });
 
@@ -1067,24 +1123,61 @@
       }
 
       // Uptime is available on both public and authenticated
-      fetch(API.uptime(name)).then(r=>r.json()).then(d => {
-         renderGraph(d.datapoints);
-      }).catch(e=>console.error());
+      updateUptimeRangeTabs(state.uptimeRange);
+      loadServiceUptime(name, state.uptimeRange);
     }
 
-    function renderGraph(datapoints) {
+    function updateUptimeRangeTabs(range) {
+      document.querySelectorAll('#uptimeRangeTabs .uptime-range-btn').forEach(b => {
+        if (b.dataset.range === range) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
+      const labelMap = { '1h': '1 Hour', '24h': '24 Hours', '7d': '7 Days', '30d': '30 Days' };
+      const lbl = document.getElementById('uptimeSectionLabel');
+      if (lbl) lbl.innerText = `Uptime Trend (${labelMap[range] || range})`;
+    }
+
+    async function loadServiceUptime(name, range) {
+      const svg = document.getElementById('uptimeSvg');
+      svg.innerHTML = '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--text-muted)" font-size="12">Loading chart...</text>';
+      try {
+        const res = await fetch(API.uptime(name, range));
+        if (res.ok) {
+          const d = await res.json();
+          renderGraph(d.datapoints, range);
+        } else {
+          svg.innerHTML = '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--down)" font-size="12">Failed to load uptime</text>';
+        }
+      } catch(e) {
+        console.error('Failed to load uptime', e);
+        svg.innerHTML = '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--down)" font-size="12">Error loading chart</text>';
+      }
+    }
+
+    function renderGraph(datapoints, range) {
        const svg = document.getElementById('uptimeSvg');
        if(!datapoints || datapoints.length === 0) {
-           svg.innerHTML = ''; return;
+           svg.innerHTML = '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="var(--text-muted)" font-size="12">No data recorded for this range</text>';
+           return;
        }
        const w = svg.parentElement.clientWidth || 500;
        const h = 180;
        svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
        
-       const maxVal = 100;
+       if (datapoints.length === 1) {
+           const y = h - (datapoints[0].uptime_pct / 100 * (h - 24)) - 12;
+           svg.innerHTML = `
+             <line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="var(--up)" stroke-width="2" />
+           `;
+           return;
+       }
+
        const pts = datapoints.map((dp, i) => {
            const x = (i / (datapoints.length - 1)) * w;
-           const y = h - (dp.uptime_pct / 100 * h);
+           const y = h - (dp.uptime_pct / 100 * (h - 24)) - 12;
            return {x, y, dp};
        });
        
@@ -1115,10 +1208,13 @@
           circle.style.cursor = 'crosshair';
           
           circle.addEventListener('mouseenter', (e) => {
-             tooltip.innerText = `${formatTS(p.dp.timestamp)}\nUptime: ${p.dp.uptime_pct}%`;
+             const tsFormatted = range === '1h'
+               ? new Date(p.dp.timestamp).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false})
+               : formatTS(p.dp.timestamp);
+             tooltip.innerText = `${tsFormatted}\nUptime: ${p.dp.uptime_pct}%`;
              tooltip.style.opacity = '1';
-             tooltip.style.left = `${Math.min(e.offsetX, w - 140)}px`;
-             tooltip.style.top = `${Math.max(e.offsetY - 40, 0)}px`;
+             tooltip.style.left = `${Math.min(Math.max(e.offsetX - 50, 10), w - 150)}px`;
+             tooltip.style.top = `${Math.max(e.offsetY - 50, 5)}px`;
           });
           circle.addEventListener('mouseleave', () => {
              tooltip.style.opacity = '0';
