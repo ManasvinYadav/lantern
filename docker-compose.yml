@@ -8,7 +8,12 @@ services:
       - "${LANTERN_PORT:-7654}:7654"
     volumes:
       - lantern_data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Docker socket: required for native container discovery and for the
+      # dashboard's container inspect/logs/restart actions.
+      # NOTE: :ro applies to the mount point, not to the Docker API. The
+      # daemon still accepts write operations over this socket, so this is
+      # a convention, not a security boundary.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Port the service listens on inside the container
       - LANTERN_PORT=7654
@@ -20,6 +25,13 @@ services:
       - LANTERN_DB_PATH=/data/lantern.db
       # Hours before a service is marked 'stale' if no heartbeat is received (default: 24)
       - LANTERN_STALE_HOURS=${LANTERN_STALE_HOURS:-24}
+      # Native Docker discovery: Lantern polls the Docker socket itself and
+      # records a heartbeat per container, so no external push script is
+      # needed. Active whenever the socket is mounted; set to false to disable.
+      - LANTERN_DOCKER_DISCOVERY=${LANTERN_DOCKER_DISCOVERY:-true}
+      # How often to poll the Docker daemon, in seconds (default: 60, floor: 10)
+      - LANTERN_DOCKER_POLL_SECONDS=${LANTERN_DOCKER_POLL_SECONDS:-60}
+      # Containers opt out of discovery with the label lantern.ignore=true
       # Webhook URLs for status change alerts (uncomment to enable):
       # - LANTERN_WEBHOOK_DISCORD=https://discord.com/api/webhooks/...
       # - LANTERN_WEBHOOK_TELEGRAM=https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
