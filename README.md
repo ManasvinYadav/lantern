@@ -1,16 +1,29 @@
 # Lantern
 
-Lantern is a lightweight status dashboard and monitoring server built in Go. It provides a single-page application (SPA) UI with dark/light themes, a push-based "heartbeat" API, and optional active checks for tracking service uptimes, downtimes, and maintenance windows in real time.
+> ### ⚠️ Beta software
+>
+> Lantern is in **beta**. It runs reliably in the author's homelab, but the API and
+> database schema may still change between releases, and it has not been hardened for
+> hostile networks. Pin a version tag rather than `latest` if you depend on it, take
+> [backups](docs/BACKUP.md), and do not expose it to the public internet without putting
+> authentication in front of it. Bug reports and issues are very welcome.
+
+Lantern is a lightweight status dashboard and monitoring server built in Go. It provides a single-page application (SPA) UI with dark/light themes, native Docker container discovery, a push-based "heartbeat" API, and optional active checks for tracking service uptimes, downtimes, and maintenance windows in real time.
 
 It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) and compiles down to a single tiny binary or a lightweight Docker container.
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.59.1)
+## Features (v0.59.1 beta)
 
+- **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
+- **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
+- **Per-check Latency**: Every status event records how long its check took, from all three sources — the Docker poller, active monitors, and passive pushes that supply an optional `latency_ms`.
 - **Real-time Dashboard**: A WebSocket connection pushes status changes to every open dashboard within about a second of them happening, with automatic reconnection and a manual-refresh fallback. Cards glow briefly in their status color when a live update lands.
-- **Push-based Heartbeats**: Services report their own status via `POST /api/status`. No active scraping means Lantern can run securely behind NATs or on the edge.
-- **Optional Active Monitoring**: Have Lantern check a service itself instead — HTTP(S), TCP port, or real ICMP ping — on a configurable interval, run concurrently through a bounded worker pool. Results feed the same history, uptime %, and incident pipeline as push-based services.
+- **Push-based Heartbeats**: Services can also report their own status via `POST /api/status`, so Lantern can track things it cannot reach — hosts behind NAT, systemd units, or anything with a shell and `curl`.
+- **Optional Active Monitoring**: Have Lantern check a service itself — HTTP(S), TCP port, or real ICMP ping — on a configurable interval, run concurrently through a bounded worker pool. Results feed the same history, uptime %, and incident pipeline.
+- **Public SVG Status Badges**: `GET /api/badge/{service}.svg` renders an embeddable shields-style badge for any service, served anonymously so it works in a README.
+- **Flap-dampened Alerts**: An outage must be confirmed by two consecutive `down` checks before it notifies, and it notifies once per episode rather than once per check. A single bad check produces no traffic at all instead of a down alert followed immediately by a recovery.
 - **SSL Certificate Expiry Tracking**: HTTP(S) active monitors capture the live certificate's expiry date and surface a warning when it's within 14 days of expiring.
 - **Non-blocking Webhook Delivery**: Discord, Telegram, Gotify, and generic webhook dispatch runs through a bounded worker pool with per-request timeouts, so a slow or unreachable endpoint never delays status ingestion. Every delivery attempt (success or failure) is logged and visible in Settings.
 - **Cross-service Activity Log**: A chronological feed of every status change and webhook delivery attempt across all services, in the Diagnostics drawer.
@@ -48,13 +61,18 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:latest
+    image: ghcr.io/manasvinyadav/lantern:v0.59.1
     container_name: lantern
     restart: unless-stopped
     ports:
       - "7654:7654"
     volumes:
       - lantern_data:/data
+      # Mount the Docker socket to enable native container discovery.
+      # Note: :ro applies to the mount point, not to the Docker API — the
+      # daemon still accepts writes over this socket, so treat access to it
+      # as equivalent to root on the host.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Secure your API
       - LANTERN_AUTH_TOKEN=your_secret_token
@@ -69,7 +87,31 @@ volumes:
 docker compose up -d
 ```
 
-Access the dashboard at `http://localhost:7654/`.
+Access the dashboard at `http://localhost:7654/`. Every container on the host appears
+on its own, with no further configuration.
+
+### Not using Docker?
+
+Discovery simply stays inactive if the socket is not mounted, and Lantern works exactly
+as before via `POST /api/status` and active monitors. To monitor things Docker cannot
+see — systemd units, remote hosts, cron jobs — push a heartbeat:
+
+```bash
+curl -sf -X POST http://localhost:7654/api/status \
+  -H "Content-Type: application/json" \
+  -d '{"service_name":"nightly-backup","status":"up","message":"Completed","latency_ms":812}'
+```
+
+## Status Badges
+
+Embed a live badge for any service:
+
+```markdown
+![status](http://your-lantern-host:7654/api/badge/my-service.svg)
+```
+
+Colors follow the service's current status: green for up, red for down, amber for
+degraded, grey for maintenance or unknown.
 
 ## Documentation Suite
 
@@ -77,8 +119,10 @@ Lantern is highly configurable. Dive into the detailed guides below:
 
 - 📖 **[API Reference](docs/API.md)**: Full list of endpoints, payloads, and examples.
 - ⚙️ **[Configuration Guide](docs/CONFIG.md)**: Detailed breakdown of all environment variables, auth, and database settings.
+- 🐳 **[Docker Discovery](docs/CONFIG.md#native-docker-discovery)**: How native container discovery works, its status mapping, and how to opt containers out.
 - 🔔 **[Webhooks & Notifications](docs/WEBHOOKS.md)**: Setup guides for Discord, Telegram, Gotify, and generic integrations.
 - 💾 **[Backup & Restore](docs/BACKUP.md)**: How to download a consistent database snapshot and restore it.
+- 📝 **[Changelog](CHANGELOG.md)**: Release history and patch notes.
 
 ## Quick API Example
 
@@ -91,7 +135,8 @@ curl -X POST http://localhost:7654/api/status \
   -d '{
     "service_name": "database",
     "status": "up",
-    "message": "Latency normal"
+    "message": "Latency normal",
+    "latency_ms": 42
   }'
 ```
 
@@ -103,6 +148,12 @@ Lantern can be natively compiled into a standalone binary:
 go mod download
 go build -ldflags="-s -w" -o lantern .
 ./lantern
+```
+
+Run the test suite with:
+
+```bash
+go vet ./... && go test ./...
 ```
 
 ## License
