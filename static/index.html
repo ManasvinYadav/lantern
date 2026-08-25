@@ -1122,7 +1122,13 @@
 
         <!-- Event History -->
         <div class="hide-public">
-          <div class="section-label">Event History</div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="section-label" style="margin-bottom:0;">Event History</div>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn" id="btnExportCsv" style="font-size:11px; padding:4px 10px;">Export CSV</button>
+              <button type="button" class="btn" id="btnExportJson" style="font-size:11px; padding:4px 10px;">Export JSON</button>
+            </div>
+          </div>
           <table>
             <thead><tr><th>Time</th><th>Status</th><th>Message</th></tr></thead>
             <tbody id="sdHistoryBody"></tbody>
@@ -1359,7 +1365,9 @@
       webhookDeliveries: '/api/webhooks/deliveries',
       monitors: '/api/monitors',
       serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`,
-      activity: '/api/activity'
+      activity: '/api/activity',
+      exportHistory: (name, format) => `/api/services/${encodeURIComponent(name)}/export?format=${format}`,
+      backup: '/api/backup'
     };
 
     // Toast System
@@ -1723,6 +1731,18 @@
             console.error(e);
             showToast('Failed to toggle maintenance mode', 'error');
           }
+        });
+
+        // Data export
+        document.getElementById('btnExportCsv').addEventListener('click', () => {
+          if (!state.activeService) return;
+          window.open(API.exportHistory(state.activeService, 'csv'), '_blank');
+          showToast(`Exporting CSV for ${state.activeService}`, 'info');
+        });
+        document.getElementById('btnExportJson').addEventListener('click', () => {
+          if (!state.activeService) return;
+          window.open(API.exportHistory(state.activeService, 'json'), '_blank');
+          showToast(`Exporting JSON for ${state.activeService}`, 'info');
         });
 
         // Save Group Assignment

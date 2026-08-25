@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"sync"
@@ -970,6 +971,63 @@ LIMIT ? OFFSET ?`, name, limit, offset)
 	}
 }
 
+// handleExportServiceHistory handles GET /api/services/{name}/export.
+// Streams the full retained status_events history for one service as a
+// downloadable CSV or JSON file.
+func handleExportServiceHistory(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := mux.Vars(r)["name"]
+		format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+		if format == "" {
+			format = "json"
+		}
+		if format != "csv" && format != "json" {
+			writeError(w, http.StatusBadRequest, "format must be csv or json")
+			return
+		}
+
+		rows, err := db.Query(`SELECT id, status, COALESCE(message,''), timestamp FROM status_events WHERE service_name = ? ORDER BY timestamp ASC, id ASC`, name)
+		if err != nil {
+			log.Printf("handleExportServiceHistory db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		events := []StatusEvent{}
+		for rows.Next() {
+			var e StatusEvent
+			if err := rows.Scan(&e.ID, &e.Status, &e.Message, &e.Timestamp); err != nil {
+				continue
+			}
+			events = append(events, e)
+		}
+
+		safeName := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, name)
+
+		if format == "csv" {
+			w.Header().Set("Content-Type", "text/csv")
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-history.csv"`, safeName))
+			cw := csv.NewWriter(w)
+			cw.Write([]string{"id", "status", "message", "timestamp"})
+			for _, e := range events {
+				cw.Write([]string{strconv.FormatInt(e.ID, 10), e.Status, e.Message, e.Timestamp})
+			}
+			cw.Flush()
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-history.json"`, safeName))
+		json.NewEncoder(w).Encode(events)
+	}
+}
+
 // handlePostDiagnostics handles POST /api/diagnostics.
 func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1520,6 +1578,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/status", handlePostStatus(db, cfg, dispatcher, hub)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/export", handleExportServiceHistory(db)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/group", handlePutServiceGroup(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/services/{name}/metadata", handleGetServiceMetadata(db)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/docker/status", handleGetDockerStatus()).Methods(http.MethodGet)
