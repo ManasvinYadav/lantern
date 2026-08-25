@@ -395,18 +395,18 @@ type StatusEventRequest struct {
 // ServiceSummary is a single item returned by GET /api/services.
 
 type ServiceSummary struct {
-	ServiceName   string         `json:"service_name"`
-	Status        string         `json:"status"`
-	Message       string         `json:"message"`
-	Timestamp     string         `json:"timestamp"`
-	LastSeen      string         `json:"last_seen"`
-	Stale         bool           `json:"stale"`
-	Maintenance   bool           `json:"maintenance"`
-	GroupName     string         `json:"group_name"`
-	Uptime7d      float64        `json:"uptime_7d"`
-	Uptime30d     float64        `json:"uptime_30d"`
-	UptimePercent float64        `json:"uptime_percent"`
-	History       []StatusBucket `json:"history"`
+	ServiceName   string          `json:"service_name"`
+	Status        string          `json:"status"`
+	Message       string          `json:"message"`
+	Timestamp     string          `json:"timestamp"`
+	LastSeen      string          `json:"last_seen"`
+	Stale         bool            `json:"stale"`
+	Maintenance   bool            `json:"maintenance"`
+	GroupName     string          `json:"group_name"`
+	Uptime7d      float64         `json:"uptime_7d"`
+	Uptime30d     float64         `json:"uptime_30d"`
+	UptimePercent float64         `json:"uptime_percent"`
+	History       []HeartbeatBeat `json:"history"`
 	// MonitorType is "" for push-based services, or "http"/"tcp"/"ping" when
 	// Lantern is actively checking this service itself (Phase 2).
 	MonitorType string `json:"monitor_type"`
@@ -418,6 +418,16 @@ type StatusEvent struct {
 	Status    string `json:"status"`
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
+}
+
+// HeartbeatBeat is one entry in a service's live heartbeat bar: either a
+// real status check or a left-padding placeholder (Status == "empty") used
+// to keep the bar a fixed length for services with fewer than the requested
+// number of recorded checks.
+type HeartbeatBeat struct {
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp"`
+	Msg       string `json:"msg"`
 }
 
 // ServiceHistoryResponse wraps the history list returned for a service.
@@ -581,6 +591,19 @@ type wsMessage struct {
 	Service ServiceSummary `json:"service"`
 }
 
+// wsHeartbeatMessage is a lightweight per-check delta broadcast alongside
+// wsMessage's fuller "status_update", so the frontend can slide a new block
+// into a service's live heartbeat bar without waiting on or re-parsing the
+// full ServiceSummary.
+type wsHeartbeatMessage struct {
+	Type        string        `json:"type"`
+	ServiceName string        `json:"service_name"`
+	Status      string        `json:"status"`
+	Timestamp   string        `json:"timestamp"`
+	UptimePct   float64       `json:"uptime_pct"`
+	NewBeat     HeartbeatBeat `json:"new_beat"`
+}
+
 // buildServiceSummary assembles the same shape returned by GET /api/services
 // for a single service, for use in WebSocket broadcasts.
 func buildServiceSummary(db *sql.DB, cfg *Config, name string) (ServiceSummary, bool) {
@@ -609,11 +632,11 @@ ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Time
 	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint)
 	s.Maintenance = maint == 1
 
-	up7, up30, buckets := getCachedOrComputeServiceMetrics(db, name)
+	up7, up30, _ := getCachedOrComputeServiceMetrics(db, name)
 	s.Uptime7d = up7
 	s.Uptime30d = up30
 	s.UptimePercent = up30
-	s.History = buckets
+	s.History = fetchRecentBeats(db, name, 30)
 
 	return s, true
 }
@@ -626,6 +649,27 @@ func broadcastServiceUpdate(hub *wsHub, db *sql.DB, cfg *Config, name string) {
 	if !ok {
 		return
 	}
+
+	// Broadcast the lightweight heartbeat delta first: the frontend uses it
+	// to slide the new beat into the live heartbeat bar and records a
+	// DOM-derived fingerprint before the fuller status_update below arrives,
+	// so the two updates converge without double-shifting the bar.
+	if len(summary.History) > 0 {
+		heartbeat := wsHeartbeatMessage{
+			Type:        "heartbeat",
+			ServiceName: summary.ServiceName,
+			Status:      summary.Status,
+			Timestamp:   summary.Timestamp,
+			UptimePct:   summary.UptimePercent,
+			NewBeat:     summary.History[len(summary.History)-1],
+		}
+		if body, err := json.Marshal(heartbeat); err != nil {
+			log.Printf("ws: failed to marshal heartbeat message: %v", err)
+		} else {
+			hub.broadcast(body)
+		}
+	}
+
 	body, err := json.Marshal(wsMessage{Type: "status_update", Service: summary})
 	if err != nil {
 		log.Printf("ws: failed to marshal broadcast message: %v", err)
@@ -1044,11 +1088,11 @@ ORDER BY s.service_name ASC;`)
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				up7, up30, buckets := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
+				up7, up30, _ := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
 				services[idx].Uptime7d = up7
 				services[idx].Uptime30d = up30
 				services[idx].UptimePercent = up30
-				services[idx].History = buckets
+				services[idx].History = fetchRecentBeats(db, services[idx].ServiceName, 30)
 			}(i)
 		}
 		wg.Wait()

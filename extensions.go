@@ -111,6 +111,53 @@ func fetchEvents(db *sql.DB, name string, since time.Time) ([]rawEvent, error) {
 	return events, rows.Err()
 }
 
+// fetchRecentBeats returns the last `limit` status checks for a service,
+// oldest first, for use in the live heartbeat bar. Uses the existing
+// (service_name, id DESC) index — a cheap point lookup, not a table scan.
+// If the service has fewer than `limit` recorded checks, the result is
+// left-padded with HeartbeatBeat{Status: "empty"} placeholders so callers
+// always get exactly `limit` entries.
+func fetchRecentBeats(db *sql.DB, name string, limit int) []HeartbeatBeat {
+	rows, err := db.Query(
+		`SELECT status, COALESCE(message,''), timestamp FROM status_events
+		 WHERE service_name = ?
+		 ORDER BY id DESC LIMIT ?`,
+		name, limit)
+	if err != nil {
+		return leftPadEmptyBeats(nil, limit)
+	}
+	defer rows.Close()
+
+	var beats []HeartbeatBeat
+	for rows.Next() {
+		var b HeartbeatBeat
+		if err := rows.Scan(&b.Status, &b.Msg, &b.Timestamp); err != nil {
+			continue
+		}
+		beats = append(beats, b)
+	}
+
+	// Reverse into oldest-first order (query returned newest-first).
+	for i, j := 0, len(beats)-1; i < j; i, j = i+1, j-1 {
+		beats[i], beats[j] = beats[j], beats[i]
+	}
+
+	return leftPadEmptyBeats(beats, limit)
+}
+
+// leftPadEmptyBeats prepends "empty" placeholder beats so the returned slice
+// is always exactly `limit` long.
+func leftPadEmptyBeats(beats []HeartbeatBeat, limit int) []HeartbeatBeat {
+	if len(beats) >= limit {
+		return beats
+	}
+	padded := make([]HeartbeatBeat, 0, limit)
+	for i := 0; i < limit-len(beats); i++ {
+		padded = append(padded, HeartbeatBeat{Status: "empty"})
+	}
+	return append(padded, beats...)
+}
+
 // fetchLastEventBefore returns the most recent event before 'before'.
 // Returns nil if no event exists.
 func fetchLastEventBefore(db *sql.DB, name string, before time.Time) *rawEvent {
