@@ -1025,8 +1025,7 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 // (Phase 2). Both sources land in the same status_events table, so uptime %,
 // incidents, and the history graph work identically regardless of origin.
 func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, serviceName, status, message string, ts time.Time, latencyMs int64) (int64, error) {
-	var lastStatus string
-	db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", serviceName).Scan(&lastStatus)
+	prev1, prev2 := fetchPrevTwoStatuses(db, serviceName)
 
 	result, err := db.Exec(
 		`INSERT INTO status_events (service_name, status, message, timestamp, latency_ms) VALUES (?, ?, ?, ?, ?)`,
@@ -1039,8 +1038,10 @@ func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, h
 
 	var maint int
 	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", serviceName).Scan(&maint)
-	if maint == 0 && lastStatus != "" && lastStatus != status {
-		dispatchWebhooks(dispatcher, db, cfg, serviceName, lastStatus, status, message)
+	if maint == 0 {
+		if fire, _ := shouldNotify(prev2, prev1, status); fire {
+			dispatchWebhooks(dispatcher, db, cfg, serviceName, prev1, status, message)
+		}
 	}
 
 	invalidateServiceMetricsCache(serviceName)
@@ -1862,6 +1863,79 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 			"service_name": name,
 			"group_name":   group,
 		})
+	}
+}
+
+// shouldNotify decides whether a recorded status transition is worth a webhook.
+// prev1 is the status immediately before `current`, prev2 the one before that;
+// "" means no such event exists yet.
+//
+// Down alerts are flap-dampened: a lone "down" beat between healthy ones is
+// often a blip, so the alert waits for a second consecutive down and fires
+// exactly once per episode. A recovery is only announced if the down episode
+// that preceded it was itself announced, so a single-beat flap produces no
+// traffic at all rather than a spurious "recovered" message.
+func shouldNotify(prev2, prev1, current string) (bool, string) {
+	// A service's very first recorded event is a baseline, not a transition.
+	if prev1 == "" {
+		return false, ""
+	}
+
+	switch {
+	case current == "down":
+		// Second consecutive down confirms the outage. prev2 != "down" keeps
+		// this to one alert per episode instead of one per check.
+		if prev1 == "down" && prev2 != "down" {
+			return true, "down"
+		}
+		return false, ""
+
+	case prev1 == "down":
+		// Leaving a down state. Only meaningful if the outage was announced,
+		// which means it reached two consecutive downs.
+		if prev2 == "down" {
+			return true, "recovery"
+		}
+		return false, ""
+
+	default:
+		// Everything else (up <-> degraded, maintenance, ...) keeps the
+		// original behaviour: report any change in status immediately.
+		if prev1 != current {
+			return true, "change"
+		}
+		return false, ""
+	}
+}
+
+// fetchPrevTwoStatuses returns the two most recent statuses for a service,
+// newest first, as (prev1, prev2). Missing entries come back as "".
+// Ordered by id (insertion order) rather than timestamp: dampening reasons
+// about the checks actually observed, so a backfilled timestamp must not
+// reshuffle the alert decision.
+func fetchPrevTwoStatuses(db *sql.DB, serviceName string) (string, string) {
+	rows, err := db.Query(
+		"SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 2",
+		serviceName)
+	if err != nil {
+		return "", ""
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err == nil {
+			out = append(out, s)
+		}
+	}
+	switch len(out) {
+	case 0:
+		return "", ""
+	case 1:
+		return out[0], ""
+	default:
+		return out[0], out[1]
 	}
 }
 
