@@ -468,10 +468,13 @@
 
     /* New beat sliding into a live heartbeat bar (see applyLiveHeartbeat). */
     @keyframes beat-pulse {
-      from { transform: scaleY(0.3); opacity: 0.3; filter: brightness(1.6); }
-      to   { transform: scaleY(1); opacity: 1; filter: brightness(1); }
+      0%   { transform: scale(1.35); filter: brightness(1.8); }
+      100% { transform: scale(1.0); filter: brightness(1.0); }
     }
-    .trend-block.beat-pulse { animation: beat-pulse var(--duration-slow) var(--ease-out); }
+    .trend-block.beat-pulse { animation: beat-pulse 0.45s ease-out; }
+
+    /* Real beats carry hover detail; empty padding blocks do not. */
+    .trend-block[data-iso-time] { cursor: help; }
 
     /* =====================================================================
        Drawers (Service Detail & Diagnostics)
@@ -1621,6 +1624,15 @@
     }
 
     // Initialization
+    // Delegated on document with mouseover (which bubbles, unlike mouseenter)
+    // so blocks that slide in later via applyLiveHeartbeat are covered too,
+    // with no per-block listeners to attach or clean up.
+    document.addEventListener('mouseover', (e) => {
+      const block = e.target && e.target.closest && e.target.closest('.trend-block');
+      if (!block || !block.dataset.isoTime) return;
+      block.setAttribute('data-tooltip', describeBeat(block.dataset));
+    });
+
     document.addEventListener('DOMContentLoaded', () => {
       if (isPublic) document.body.classList.add('is-public');
 
@@ -2454,10 +2466,49 @@
     // the live heartbeat slide-in so the two never drift out of sync.
     function renderTrendBlock(beat) {
       const status = (beat && beat.status) || 'empty';
-      const ts = beat && beat.timestamp ? new Date(beat.timestamp).toLocaleString() : '';
-      const msg = beat && beat.msg;
-      const tooltip = [ts, status.toUpperCase(), msg ? msg : ''].filter(Boolean).join(' — ');
-      return `<div class="trend-block ${status}" data-tooltip="${escapeHtml(tooltip)}"></div>`;
+      // Padding blocks describe nothing, so they get no hover detail.
+      if (status === 'empty') return '<div class="trend-block empty"></div>';
+
+      // The raw values are stored on the element and the tooltip text is
+      // composed on hover (see describeBeat), so the relative time is
+      // computed when the user points at a block rather than being frozen
+      // at whatever moment the card happened to be rendered.
+      const iso = (beat && beat.timestamp) || '';
+      const msg = (beat && beat.msg) || '';
+      const lat = (beat && beat.latency_ms !== undefined && beat.latency_ms !== null) ? beat.latency_ms : '';
+      return `<div class="trend-block ${status}"`
+        + ` data-iso-time="${escapeHtml(iso)}"`
+        + ` data-status="${escapeHtml(status.toUpperCase())}"`
+        + ` data-latency="${escapeHtml(String(lat))}"`
+        + ` data-msg="${escapeHtml(msg)}"></div>`;
+    }
+
+    // Humanizes a millisecond delta for the heartbeat tooltip.
+    function humanizeAgo(ms) {
+      if (!isFinite(ms) || ms < 0) return 'just now';
+      const s = Math.floor(ms / 1000);
+      if (s < 45) return 'just now';
+      const m = Math.floor(s / 60);
+      if (m < 60) return Math.max(m, 1) + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    }
+
+    // Composes the tooltip for one heartbeat block from its data-* values:
+    // status, how long ago the check landed, its absolute local time, how
+    // long the check itself took, and the reported message.
+    function describeBeat(data) {
+      const parts = [];
+      if (data.status) parts.push(data.status);
+      const t = new Date(data.isoTime);
+      if (!isNaN(t.getTime())) {
+        parts.push(humanizeAgo(Date.now() - t.getTime()));
+        parts.push(t.toLocaleString());
+      }
+      if (data.latency !== undefined && data.latency !== '') parts.push(data.latency + 'ms');
+      if (data.msg) parts.push(data.msg);
+      return parts.join(' — ');
     }
 
     function buildCardHTML(s, cls, statText, trendHTML) {
@@ -2566,7 +2617,7 @@
               trendHTML = `
                 <div class="trend-container hide-public">
                    <div class="trend-header">
-                     <span>Live Heartbeat</span>
+                     <span>Check History (Last 30 Beats)</span>
                      <span class="uptime-pct-label">${uptimePercent}</span>
                    </div>
                    <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
