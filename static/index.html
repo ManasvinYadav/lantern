@@ -466,6 +466,13 @@
     .trend-block.unknown { background: var(--unknown); }
     .trend-block.empty { background: var(--panel-hover); }
 
+    /* New beat sliding into a live heartbeat bar (see applyLiveHeartbeat). */
+    @keyframes beat-pulse {
+      from { transform: scaleY(0.3); opacity: 0.3; filter: brightness(1.6); }
+      to   { transform: scaleY(1); opacity: 1; filter: brightness(1); }
+    }
+    .trend-block.beat-pulse { animation: beat-pulse var(--duration-slow) var(--ease-out); }
+
     /* =====================================================================
        Drawers (Service Detail & Diagnostics)
        ===================================================================== */
@@ -1435,6 +1442,13 @@
     let wsReconnectAttempts = 0;
     let wsReconnectTimer = null;
 
+    // When true, renderServices()'s trend-bar fingerprint-rebuild is skipped.
+    // Set around the status_update handler's renderServices() call so the
+    // live heartbeat bar's incremental slide-in (applyLiveHeartbeat) is the
+    // sole thing touching the trend bar during WS-driven updates; plain REST
+    // polling still rebuilds/resyncs it normally.
+    let suppressTrendRebuild = false;
+
     // --- Connection status banner ---------------------------------------
     // A visible, non-silent indicator for a dropped WebSocket or a failed
     // API call. wsDownSince is used to add a short grace period before
@@ -1494,6 +1508,8 @@
         }
         if (msg.type === 'status_update' && msg.service) {
           applyLiveServiceUpdate(msg.service);
+        } else if (msg.type === 'heartbeat') {
+          applyLiveHeartbeat(msg);
         }
       });
 
@@ -1530,7 +1546,9 @@
         state.services.push(service);
       }
       updateMetrics();
+      suppressTrendRebuild = true;
       renderServices();
+      suppressTrendRebuild = false;
       if (!isPublic) updateDiagFilterOptions();
       updateGroupFilterOptions();
 
@@ -1552,6 +1570,54 @@
       if (state.activeService === service.service_name) {
         loadServiceUptime(state.activeService, state.uptimeRange);
       }
+    }
+
+    // Reads back the status class (e.g. "up", "down", "empty") that
+    // renderTrendBlock assigned to a .trend-block element, for computing a
+    // fingerprint from live DOM state rather than from `state.services`.
+    function beatStatusFromBlock(el) {
+      for (const c of el.classList) {
+        if (c !== 'trend-block' && c !== 'beat-pulse') return c;
+      }
+      return 'empty';
+    }
+
+    // Handles a "heartbeat" WS message: slides one new beat into the card's
+    // live heartbeat bar. Arrives just before the fuller "status_update" for
+    // the same event (see broadcastServiceUpdate on the backend) — this
+    // handler establishes the bar's new DOM state and fingerprint on its
+    // own, from the DOM rather than `state.services` (which status_update
+    // hasn't updated yet), so the two messages converge without
+    // double-shifting the bar.
+    function applyLiveHeartbeat(msg) {
+      const grid = document.getElementById('servicesGrid');
+      const card = grid && grid.querySelector(`[data-service="${CSS.escape(msg.service_name)}"]`);
+      if (!card) return; // new service — the status_update right behind this creates the card
+
+      const trendBar = card.querySelector('.trend-bar');
+      if (!trendBar) return; // public view hides the trend container
+
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderTrendBlock(msg.new_beat);
+      const block = tmp.firstElementChild;
+      if (!block) return;
+
+      block.classList.add('beat-pulse');
+      trendBar.appendChild(block);
+      setTimeout(() => block.classList.remove('beat-pulse'), 500);
+
+      while (trendBar.children.length > 30) {
+        trendBar.firstElementChild.remove();
+      }
+
+      const uptimeLabel = card.querySelector('.uptime-pct-label');
+      if (uptimeLabel && msg.uptime_pct !== undefined && msg.uptime_pct !== null) {
+        uptimeLabel.innerText = msg.uptime_pct.toFixed(1) + '%';
+      }
+
+      trendBar.dataset.fingerprint = Array.from(trendBar.children)
+        .map(beatStatusFromBlock)
+        .join(',');
     }
 
     // Initialization
@@ -2383,6 +2449,17 @@
       }
     }
 
+    // Builds one heartbeat block from a {status, timestamp, msg} beat (or an
+    // "empty" left-padding placeholder). Shared by initial card creation and
+    // the live heartbeat slide-in so the two never drift out of sync.
+    function renderTrendBlock(beat) {
+      const status = (beat && beat.status) || 'empty';
+      const ts = beat && beat.timestamp ? new Date(beat.timestamp).toLocaleString() : '';
+      const msg = beat && beat.msg;
+      const tooltip = [ts, status.toUpperCase(), msg ? msg : ''].filter(Boolean).join(' — ');
+      return `<div class="trend-block ${status}" data-tooltip="${escapeHtml(tooltip)}"></div>`;
+    }
+
     function buildCardHTML(s, cls, statText, trendHTML) {
       const groupBadge = s.group_name ? `<span class="service-group-badge">${escapeHtml(s.group_name)}</span>` : '';
       const monitorInfo = monitorBadgeInfo(s.monitor_type);
@@ -2483,17 +2560,13 @@
             if (!isPublic) {
               let blocks = Array(30).fill('<div class="trend-block empty"></div>').join('');
               if (s.history && Array.isArray(s.history)) {
-                blocks = s.history.map(b => {
-                  const bcls = b.status || 'empty';
-                  const date = new Date(b.start).toLocaleDateString();
-                  return `<div class="trend-block ${bcls}" data-tooltip="${date} - ${bcls.toUpperCase()}"></div>`;
-                }).join('');
+                blocks = s.history.map(renderTrendBlock).join('');
               }
               const uptimePercent = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
               trendHTML = `
                 <div class="trend-container hide-public">
                    <div class="trend-header">
-                     <span>30-Day History</span>
+                     <span>Live Heartbeat</span>
                      <span class="uptime-pct-label">${uptimePercent}</span>
                    </div>
                    <div class="trend-bar" id="trend-${s.service_name.replace(/[^a-zA-Z0-9]/g, '_')}">
@@ -2556,24 +2629,21 @@
               monitorWrap.remove();
             }
 
-            // Trend bar / uptime% label previously only rendered on initial
-            // card creation and never updated again — meaning the 30-day
-            // history graph and uptime% froze at whatever they were on
-            // first page load, even as live WebSocket pushes and polling
-            // kept everything else current. Cheap fingerprint guard avoids
-            // rebuilding the (up to 96-block) bar on every render call for
-            // cards whose history hasn't actually changed.
+            // Trend bar resync: on a plain REST poll (loadData -> renderServices)
+            // this fingerprint guard catches any drift — e.g. a heartbeat WS
+            // message dropped or missed during a brief disconnect — and
+            // rebuilds the bar to match the authoritative server state. When
+            // renderServices() is instead called from the live status_update
+            // WS handler, this is skipped: the trend bar is kept live
+            // exclusively by applyLiveHeartbeat's incremental slide-in, so
+            // this rebuild doesn't fight with (and erase) that animation.
             const trendBar = card.querySelector('.trend-bar');
-            if (trendBar) {
+            if (trendBar && !suppressTrendRebuild) {
               const history = Array.isArray(s.history) ? s.history : [];
               const fingerprint = history.map(b => b.status || 'empty').join(',');
               if (trendBar.dataset.fingerprint !== fingerprint) {
                 trendBar.innerHTML = history.length > 0
-                  ? history.map(b => {
-                      const bcls = b.status || 'empty';
-                      const date = new Date(b.start).toLocaleDateString();
-                      return `<div class="trend-block ${bcls}" data-tooltip="${date} - ${bcls.toUpperCase()}"></div>`;
-                    }).join('')
+                  ? history.map(renderTrendBlock).join('')
                   : Array(30).fill('<div class="trend-block empty"></div>').join('');
                 trendBar.dataset.fingerprint = fingerprint;
               }
