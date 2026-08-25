@@ -691,6 +691,19 @@
       border: 1px solid var(--border);
     }
 
+    /* Active Monitor Badge — marks services Lantern checks itself (Phase 2),
+       distinct from the default push-based ones (no badge). */
+    .service-monitor-badge {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+
     /* Toast Notifications */
     .toast-container {
       position: fixed;
@@ -1120,6 +1133,34 @@
             <span style="color:var(--text-muted);">No deliveries yet.</span>
           </div>
         </div>
+
+        <!-- Active Monitors Section -->
+        <div style="padding-top:16px; border-top:1px solid var(--border);">
+          <div class="section-label">Active Monitors</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            Optional: have Lantern check a service itself (HTTP, TCP, or ping) on a schedule, instead of waiting for it to push its own status.
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+            <input type="text" class="form-input" id="monitorServiceName" placeholder="Service name (existing or new)" />
+            <div style="display:flex; gap:8px;">
+              <select id="monitorType" class="form-input" style="flex:1;">
+                <option value="http">HTTP(S)</option>
+                <option value="tcp">TCP port</option>
+                <option value="ping">Ping (ICMP)</option>
+              </select>
+              <input type="number" class="form-input" id="monitorInterval" placeholder="Interval (s)" value="60" min="10" max="3600" style="width:110px;" />
+            </div>
+            <input type="text" class="form-input" id="monitorTarget" placeholder="http://host:port/path, or host:port, or host" />
+            <div style="display:flex; justify-content:flex-end;">
+              <button type="button" class="btn primary" id="btnSaveMonitor">Add / Update Monitor</button>
+            </div>
+          </div>
+
+          <div id="activeMonitorsList" style="font-size:12px; margin-top:14px; display:flex; flex-direction:column; gap:6px;">
+            <span style="color:var(--text-muted);">No active monitors configured.</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1188,7 +1229,9 @@
       dockerRestart: (name) => `/api/services/${encodeURIComponent(name)}/docker/restart`,
       dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`,
       ws: isPublic ? '/api/public/ws' : '/ws',
-      webhookDeliveries: '/api/webhooks/deliveries'
+      webhookDeliveries: '/api/webhooks/deliveries',
+      monitors: '/api/monitors',
+      serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`
     };
 
     // Toast System
@@ -1641,6 +1684,9 @@
 
         const btnRefreshDeliveries = document.getElementById('btnRefreshDeliveries');
         if (btnRefreshDeliveries) btnRefreshDeliveries.addEventListener('click', loadWebhookDeliveries);
+
+        const btnSaveMonitor = document.getElementById('btnSaveMonitor');
+        if (btnSaveMonitor) btnSaveMonitor.addEventListener('click', saveActiveMonitor);
       }
 
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
@@ -1729,7 +1775,82 @@
       setAccentColor(localStorage.getItem('lantern_accent') || null);
       loadWebhookSettings();
       loadWebhookDeliveries();
+      loadActiveMonitors();
     }
+
+    async function loadActiveMonitors() {
+      const box = document.getElementById('activeMonitorsList');
+      if (!box) return;
+      try {
+        const res = await fetch(API.monitors);
+        if (!res.ok) throw new Error('Failed to load monitors');
+        const monitors = await res.json();
+        if (!monitors || monitors.length === 0) {
+          box.innerHTML = '<span style="color:var(--text-muted);">No active monitors configured.</span>';
+          return;
+        }
+        box.innerHTML = monitors.map(m => {
+          const info = monitorBadgeInfo(m.monitor_type) || { icon: '?', label: m.monitor_type };
+          const lastChecked = m.last_checked_at ? new Date(m.last_checked_at).toLocaleTimeString() : 'never';
+          const stateLabel = m.enabled ? '' : ' <span style="color:var(--text-muted);">(disabled)</span>';
+          return `
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:rgba(0,0,0,0.15); border:1px solid var(--border); border-radius:var(--radius-sm);">
+              <div>
+                <strong>${escapeHtml(m.service_name)}</strong>${stateLabel}
+                <div style="color:var(--text-muted); font-size:11px;">${info.icon} ${info.label} → ${escapeHtml(m.target)} · every ${m.interval_seconds}s · last checked ${lastChecked}</div>
+              </div>
+              <button type="button" class="btn" style="font-size:11px; padding:4px 10px;" onclick="deleteActiveMonitor('${escapeHtml(m.service_name).replace(/'/g, "\\'")}')">Remove</button>
+            </div>`;
+        }).join('');
+      } catch (err) {
+        box.innerHTML = '<span style="color:var(--down);">Failed to load active monitors.</span>';
+        console.error('Error loading active monitors:', err);
+      }
+    }
+
+    async function saveActiveMonitor() {
+      const nameInput = document.getElementById('monitorServiceName');
+      const btn = document.getElementById('btnSaveMonitor');
+      const name = (nameInput.value || '').trim();
+      const monitor_type = document.getElementById('monitorType').value;
+      const target = (document.getElementById('monitorTarget').value || '').trim();
+      const interval_seconds = parseInt(document.getElementById('monitorInterval').value, 10) || 60;
+
+      if (!name) { showToast('Service name is required', 'error'); return; }
+      if (!target) { showToast('Target is required', 'error'); return; }
+
+      btn.disabled = true;
+      try {
+        const res = await fetch(API.serviceMonitor(name), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: true })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save monitor');
+        showToast(`Active monitor saved for ${name}`, 'success');
+        nameInput.value = '';
+        document.getElementById('monitorTarget').value = '';
+        await loadActiveMonitors();
+        loadData();
+      } catch (err) {
+        showToast(`Failed to save monitor: ${err.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    window.deleteActiveMonitor = async function(name) {
+      try {
+        const res = await fetch(API.serviceMonitor(name), { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to remove monitor');
+        showToast(`Active monitor removed for ${name}`, 'info');
+        await loadActiveMonitors();
+        loadData();
+      } catch (err) {
+        showToast(`Failed to remove monitor: ${err.message}`, 'error');
+      }
+    };
 
     async function loadWebhookDeliveries() {
       const box = document.getElementById('webhookDeliveryLog');
@@ -1969,8 +2090,19 @@
       }
     }
 
+    function monitorBadgeInfo(monitorType) {
+      switch (monitorType) {
+        case 'http': return { icon: '🌐', label: 'HTTP' };
+        case 'tcp': return { icon: '🔌', label: 'TCP' };
+        case 'ping': return { icon: '📶', label: 'PING' };
+        default: return null;
+      }
+    }
+
     function buildCardHTML(s, cls, statText, trendHTML) {
       const groupBadge = s.group_name ? `<span class="service-group-badge">${escapeHtml(s.group_name)}</span>` : '';
+      const monitorInfo = monitorBadgeInfo(s.monitor_type);
+      const monitorBadge = monitorInfo ? `<span class="service-monitor-badge" title="Actively monitored via ${monitorInfo.label}">${monitorInfo.icon} ${monitorInfo.label}</span>` : '';
       return `
         <div class="service-header">
           <div class="service-name-group">
@@ -1978,6 +2110,7 @@
             <div class="service-title-wrap" style="display:flex; align-items:center; gap:8px;">
               <div class="service-name">${escapeHtml(s.service_name)}</div>
               ${groupBadge}
+              ${monitorBadge}
             </div>
           </div>
           <div class="service-status-text">${statText}</div>
@@ -2120,6 +2253,23 @@
               }
             } else if (groupWrap) {
               groupWrap.remove();
+            }
+
+            let monitorWrap = card.querySelector('.service-monitor-badge');
+            const monitorInfo = monitorBadgeInfo(s.monitor_type);
+            if (monitorInfo) {
+              const label = `${monitorInfo.icon} ${monitorInfo.label}`;
+              if (!monitorWrap && titleWrap) {
+                const badge = document.createElement('span');
+                badge.className = 'service-monitor-badge';
+                badge.title = `Actively monitored via ${monitorInfo.label}`;
+                badge.innerText = label;
+                titleWrap.appendChild(badge);
+              } else if (monitorWrap && monitorWrap.innerText !== label) {
+                monitorWrap.innerText = label;
+              }
+            } else if (monitorWrap) {
+              monitorWrap.remove();
             }
 
             if (grid.children[index] !== card) {

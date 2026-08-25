@@ -205,6 +205,17 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created
     ON webhook_deliveries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS active_monitors (
+    service_name     TEXT PRIMARY KEY,
+    monitor_type     TEXT NOT NULL,
+    target           TEXT NOT NULL,
+    interval_seconds INTEGER NOT NULL DEFAULT 60,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    last_checked_at  DATETIME,
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -321,6 +332,9 @@ type ServiceSummary struct {
 	Uptime30d     float64        `json:"uptime_30d"`
 	UptimePercent float64        `json:"uptime_percent"`
 	History       []StatusBucket `json:"history"`
+	// MonitorType is "" for push-based services, or "http"/"tcp"/"ping" when
+	// Lantern is actively checking this service itself (Phase 2).
+	MonitorType string `json:"monitor_type"`
 }
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
@@ -498,11 +512,12 @@ func buildServiceSummary(db *sql.DB, cfg *Config, name string) (ServiceSummary, 
 	var s ServiceSummary
 	var msg sql.NullString
 	err := db.QueryRow(`
-SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, '')
+SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, ''), COALESCE(m.monitor_type, '')
 FROM status_events s
 LEFT JOIN service_groups g ON s.service_name = g.service_name
+LEFT JOIN active_monitors m ON s.service_name = m.service_name AND m.enabled = 1
 WHERE s.service_name = ?
-ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName)
+ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName, &s.MonitorType)
 	if err != nil {
 		return s, false
 	}
@@ -707,10 +722,7 @@ WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
 			}
 			t, err := time.Parse(time.RFC3339, ts)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
-				db.Exec(`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, 'down', 'Service missed heartbeat timeout', ?)`, name, time.Now().UTC().Format(time.RFC3339))
-				invalidateServiceMetricsCache(name)
-				dispatchWebhooks(dispatcher, db, cfg, name, status, "down", "Service missed heartbeat timeout")
-				go broadcastServiceUpdate(hub, db, cfg, name)
+				ingestStatusEvent(db, cfg, dispatcher, hub, name, "down", "Service missed heartbeat timeout", time.Now().UTC())
 			}
 		}
 		rows.Close()
@@ -780,38 +792,50 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 			return
 		}
 
-		var lastStatus string
-		db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", req.ServiceName).Scan(&lastStatus)
-
-		result, err := db.Exec(
-			`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, ?, ?, ?)`,
-			req.ServiceName, req.Status, req.Message, ts.Format(time.RFC3339),
-		)
-		if err != nil {
-			log.Printf("handlePostStatus db error: %v", err)
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-
-		id, _ := result.LastInsertId()
-
 		if req.GroupName != "" {
 			_, _ = db.Exec(`INSERT INTO service_groups (service_name, group_name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
 				ON CONFLICT(service_name) DO UPDATE SET group_name = excluded.group_name, updated_at = CURRENT_TIMESTAMP`,
 				req.ServiceName, strings.TrimSpace(req.GroupName))
 		}
 
-		var maint int
-		db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", req.ServiceName).Scan(&maint)
-		if maint == 0 && lastStatus != "" && lastStatus != req.Status {
-			dispatchWebhooks(dispatcher, db, cfg, req.ServiceName, lastStatus, req.Status, req.Message)
+		id, err := ingestStatusEvent(db, cfg, dispatcher, hub, req.ServiceName, req.Status, req.Message, ts)
+		if err != nil {
+			log.Printf("handlePostStatus db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
 		}
-
-		invalidateServiceMetricsCache(req.ServiceName)
-		go broadcastServiceUpdate(hub, db, cfg, req.ServiceName)
 
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
+}
+
+// ingestStatusEvent is the single write path for every status change,
+// whether it arrives via POST /api/status (push) or an active monitor check
+// (Phase 2). Both sources land in the same status_events table, so uptime %,
+// incidents, and the history graph work identically regardless of origin.
+func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, serviceName, status, message string, ts time.Time) (int64, error) {
+	var lastStatus string
+	db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", serviceName).Scan(&lastStatus)
+
+	result, err := db.Exec(
+		`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, ?, ?, ?)`,
+		serviceName, status, message, ts.Format(time.RFC3339),
+	)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := result.LastInsertId()
+
+	var maint int
+	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", serviceName).Scan(&maint)
+	if maint == 0 && lastStatus != "" && lastStatus != status {
+		dispatchWebhooks(dispatcher, db, cfg, serviceName, lastStatus, status, message)
+	}
+
+	invalidateServiceMetricsCache(serviceName)
+	go broadcastServiceUpdate(hub, db, cfg, serviceName)
+
+	return id, nil
 }
 
 // handleGetServices handles GET /api/services.
@@ -819,9 +843,10 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 func handleGetServices(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`
-SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, '')
+SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, ''), COALESCE(m.monitor_type, '')
 FROM status_events s
 LEFT JOIN service_groups g ON s.service_name = g.service_name
+LEFT JOIN active_monitors m ON s.service_name = m.service_name AND m.enabled = 1
 WHERE s.id IN (
     SELECT MAX(id) FROM status_events GROUP BY service_name
 )
@@ -838,7 +863,7 @@ ORDER BY s.service_name ASC;`)
 		for rows.Next() {
 			var s ServiceSummary
 			var msg sql.NullString
-			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName); err != nil {
+			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName, &s.MonitorType); err != nil {
 				continue
 			}
 			if msg.Valid {
@@ -1391,7 +1416,7 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.Handler {
+func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, scheduler *monitorScheduler) http.Handler {
 	r := mux.NewRouter()
 
 	// --- WebSocket routes (registered outside jsonMiddleware; the upgrade
@@ -1409,6 +1434,11 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
+
+	api.Handle("/monitors", handleGetMonitors(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/monitor", handleGetServiceMonitor(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/monitor", handlePutServiceMonitor(db, scheduler)).Methods(http.MethodPut, http.MethodPost)
+	api.Handle("/services/{name}/monitor", handleDeleteServiceMonitor(db, scheduler)).Methods(http.MethodDelete)
 
 	api.Handle("/status", handlePostStatus(db, cfg, dispatcher, hub)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
@@ -1510,6 +1540,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 // ---------------------------------------------------------------------------
 
 const webhookWorkerCount = 4
+const monitorWorkerCount = 4
 
 func main() {
 	cfg := loadConfig()
@@ -1519,13 +1550,17 @@ func main() {
 	hub := newWSHub()
 	dispatcher := newWebhookDispatcher(db, webhookWorkerCount)
 
+	monitorPool := newMonitorPool(db, cfg, dispatcher, hub, monitorWorkerCount)
+	scheduler := newMonitorScheduler(db, monitorPool)
+	scheduler.loadAndStartAll()
+
 	// Run retention cleanup in the background every hour.
 	go runRetentionCleanup(db, cfg)
 
 	// Background worker for missing heartbeats
 	go runStaleChecker(db, cfg, dispatcher, hub)
 
-	router := setupRoutes(db, cfg, dispatcher, hub)
+	router := setupRoutes(db, cfg, dispatcher, hub, scheduler)
 
 	log.Printf("Lantern v%s listening on :%s (auth=%v, db=%s, retention=%dd)",
 		version, cfg.Port, cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
