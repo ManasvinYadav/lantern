@@ -147,6 +147,9 @@ CREATE INDEX IF NOT EXISTS idx_status_events_service_id
 CREATE INDEX IF NOT EXISTS idx_status_events_service_ts
     ON status_events(service_name, timestamp ASC);
 
+CREATE INDEX IF NOT EXISTS idx_status_svc_time
+    ON status_events(service_name, timestamp DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS diagnostic_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     service_name TEXT    NOT NULL,
@@ -230,6 +233,11 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 
 	// Schema migration for active_monitors cert_expiry_at column (SSL expiry tracking)
 	_, _ = db.Exec("ALTER TABLE active_monitors ADD COLUMN cert_expiry_at DATETIME;")
+
+	// Schema migration for status_events latency_ms column (per-check latency).
+	// Errors are ignored: on every restart after the first this is a
+	// "duplicate column name" no-op.
+	_, _ = db.Exec("ALTER TABLE status_events ADD COLUMN latency_ms INTEGER DEFAULT 0;")
 
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
@@ -428,6 +436,9 @@ type HeartbeatBeat struct {
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
 	Msg       string `json:"msg"`
+	// LatencyMs is how long the check itself took, in milliseconds. 0 for
+	// "empty" padding beats and for any event whose source did not report one.
+	LatencyMs int64 `json:"latency_ms"`
 }
 
 // ServiceHistoryResponse wraps the history list returned for a service.
@@ -635,8 +646,11 @@ ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Time
 	up7, up30, _ := getCachedOrComputeServiceMetrics(db, name)
 	s.Uptime7d = up7
 	s.Uptime30d = up30
-	s.UptimePercent = up30
 	s.History = fetchRecentBeats(db, name, 30)
+	// UptimePercent is the heartbeat-window ratio (up / non-empty beats over
+	// the last 30 checks), not the 30-day average. It is what the card's
+	// heartbeat header shows; uptime_7d / uptime_30d keep their old meaning.
+	s.UptimePercent = windowUptimePct(s.History)
 
 	return s, true
 }
@@ -1091,8 +1105,8 @@ ORDER BY s.service_name ASC;`)
 				up7, up30, _ := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
 				services[idx].Uptime7d = up7
 				services[idx].Uptime30d = up30
-				services[idx].UptimePercent = up30
 				services[idx].History = fetchRecentBeats(db, services[idx].ServiceName, 30)
+				services[idx].UptimePercent = windowUptimePct(services[idx].History)
 			}(i)
 		}
 		wg.Wait()

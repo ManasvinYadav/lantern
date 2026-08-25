@@ -119,9 +119,9 @@ func fetchEvents(db *sql.DB, name string, since time.Time) ([]rawEvent, error) {
 // always get exactly `limit` entries.
 func fetchRecentBeats(db *sql.DB, name string, limit int) []HeartbeatBeat {
 	rows, err := db.Query(
-		`SELECT status, COALESCE(message,''), timestamp FROM status_events
+		`SELECT status, COALESCE(message,''), timestamp, COALESCE(latency_ms, 0) FROM status_events
 		 WHERE service_name = ?
-		 ORDER BY id DESC LIMIT ?`,
+		 ORDER BY timestamp DESC, id DESC LIMIT ?`,
 		name, limit)
 	if err != nil {
 		return leftPadEmptyBeats(nil, limit)
@@ -131,7 +131,7 @@ func fetchRecentBeats(db *sql.DB, name string, limit int) []HeartbeatBeat {
 	var beats []HeartbeatBeat
 	for rows.Next() {
 		var b HeartbeatBeat
-		if err := rows.Scan(&b.Status, &b.Msg, &b.Timestamp); err != nil {
+		if err := rows.Scan(&b.Status, &b.Msg, &b.Timestamp, &b.LatencyMs); err != nil {
 			continue
 		}
 		beats = append(beats, b)
@@ -156,6 +156,28 @@ func leftPadEmptyBeats(beats []HeartbeatBeat, limit int) []HeartbeatBeat {
 		padded = append(padded, HeartbeatBeat{Status: "empty"})
 	}
 	return append(padded, beats...)
+}
+
+// windowUptimePct returns the uptime percentage across a heartbeat window,
+// counting only real checks: "empty" left-padding placeholders are excluded
+// from both numerator and denominator, so a service with 3 recorded checks
+// is scored out of 3 rather than out of 30. Returns 0 when the window holds
+// no real checks at all.
+func windowUptimePct(beats []HeartbeatBeat) float64 {
+	var total, up int
+	for _, b := range beats {
+		if b.Status == "empty" {
+			continue
+		}
+		total++
+		if b.Status == "up" {
+			up++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return (float64(up) / float64(total)) * 100
 }
 
 // fetchLastEventBefore returns the most recent event before 'before'.
