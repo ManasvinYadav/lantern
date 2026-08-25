@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"html"
 	"io"
 	"sync"
 
@@ -328,7 +329,7 @@ func isProtectedEndpoint(r *http.Request) bool {
 // authMiddleware enforces HTTP Basic Auth or Bearer tokens.
 func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/public/") || r.URL.Path == "/metrics" {
+		if strings.HasPrefix(r.URL.Path, "/api/public/") || strings.HasPrefix(r.URL.Path, "/api/badge/") || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1939,6 +1940,95 @@ func fetchPrevTwoStatuses(db *sql.DB, serviceName string) (string, string) {
 	}
 }
 
+// badgeColorForStatus maps a service status to its badge fill colour.
+// Anything unrecognised (maintenance, stale, unknown, "") is neutral grey.
+func badgeColorForStatus(status string) string {
+	switch status {
+	case "up":
+		return "#10B981"
+	case "down":
+		return "#F43F5E"
+	case "degraded":
+		return "#F59E0B"
+	default:
+		return "#6B7280"
+	}
+}
+
+// handleBadge serves GET /api/badge/{service}.svg: a small shields-style SVG
+// showing a service's current status, for embedding in a README.
+//
+// Registered on the root router rather than the /api subrouter because
+// jsonMiddleware would otherwise stamp Content-Type: application/json onto
+// the SVG, and allowlisted in authMiddleware so an embedded badge still
+// renders for anonymous readers.
+func handleBadge(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := mux.Vars(r)["service"]
+
+		// Maintenance outranks the last recorded check, matching how the
+		// dashboard itself labels a service that is intentionally offline.
+		status := "unknown"
+		var maint int
+		if err := db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint); err == nil && maint == 1 {
+			status = "maintenance"
+		} else {
+			var s string
+			if err := db.QueryRow(
+				"SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1",
+				name).Scan(&s); err == nil && s != "" {
+				status = s
+			}
+		}
+
+		// Cap the label so a long path segment cannot produce an absurd badge.
+		label := name
+		if len(label) > 40 {
+			label = label[:40]
+		}
+
+		// Rough Verdana 11px advance; exact metrics are unnecessary for a badge.
+		labelW := len(label)*7 + 12
+		valueW := len(status)*7 + 12
+		totalW := labelW + valueW
+
+		// The service name arrives from the URL path, so both strings are
+		// escaped before landing in SVG text nodes and attributes.
+		esc := html.EscapeString
+		svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="20" role="img" aria-label="%s: %s">
+<title>%s: %s</title>
+<linearGradient id="s" x2="0" y2="100%%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+<clipPath id="r"><rect width="%d" height="20" rx="3" fill="#fff"/></clipPath>
+<g clip-path="url(#r)">
+<rect width="%d" height="20" fill="#3F3F46"/>
+<rect x="%d" width="%d" height="20" fill="%s"/>
+<rect width="%d" height="20" fill="url(#s)"/>
+</g>
+<g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,Geneva,sans-serif" font-size="11">
+<text x="%d" y="15" fill="#010101" fill-opacity=".3">%s</text>
+<text x="%d" y="14">%s</text>
+<text x="%d" y="15" fill="#010101" fill-opacity=".3">%s</text>
+<text x="%d" y="14">%s</text>
+</g>
+</svg>`,
+			totalW, esc(label), esc(status),
+			esc(label), esc(status),
+			totalW,
+			labelW,
+			labelW, valueW, badgeColorForStatus(status),
+			totalW,
+			labelW/2, esc(label),
+			labelW/2, esc(label),
+			labelW+valueW/2, esc(status),
+			labelW+valueW/2, esc(status))
+
+		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(svg))
+	}
+}
+
 func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, scheduler *monitorScheduler) http.Handler {
 	r := mux.NewRouter()
 
@@ -1950,6 +2040,10 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	// --- Prometheus metrics (plain text, not JSON — registered outside
 	// the /api subrouter's jsonMiddleware) ---
 	r.Handle("/metrics", handlePrometheusMetrics(db)).Methods(http.MethodGet)
+
+	// --- Public SVG status badge (registered before the /api subrouter so
+	// jsonMiddleware does not overwrite Content-Type with application/json) ---
+	r.Handle("/api/badge/{service}.svg", handleBadge(db)).Methods(http.MethodGet)
 
 	// --- API routes ---
 	api := r.PathPrefix("/api").Subrouter()
