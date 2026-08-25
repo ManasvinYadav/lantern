@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -167,8 +165,15 @@ type segment struct {
 }
 
 // buildTimeline constructs a timeline covering [since, now] from prior state + events.
+// When there's no event before `since` — the service is newer than the
+// requested window, or has no history at all — the leading segment is
+// "empty" rather than "unknown". "empty" means "this service didn't exist
+// yet"; callers exclude it from uptime/incident totals entirely, so a
+// brand-new service doesn't read as having been up for time before it
+// existed. "unknown" is reserved for genuinely indeterminate state within a
+// service's real history.
 func buildTimeline(prior *rawEvent, events []rawEvent, since time.Time) []segment {
-	startStatus := "unknown"
+	startStatus := "empty"
 	startMsg := ""
 	if prior != nil {
 		startStatus = prior.Status
@@ -229,7 +234,7 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 			totalSec = 1
 		}
 
-		var downSec float64
+		var downSec, emptySec float64
 		var incidentCount int
 		inIncident := false
 
@@ -244,6 +249,14 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 			if dur < 0 {
 				dur = 0
 			}
+			if seg.status == "empty" {
+				// Service didn't exist yet for this stretch of the window;
+				// exclude it from the uptime denominator entirely rather
+				// than silently counting it as up.
+				emptySec += dur
+				inIncident = false
+				continue
+			}
 			if isDown(seg.status) {
 				if !isInMaintenance(db, name, seg.start) {
 					downSec += dur
@@ -257,7 +270,12 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		uptimePct := math.Round(((totalSec-downSec)/totalSec*100)*100) / 100
+		effectiveTotalSec := totalSec - emptySec
+		if effectiveTotalSec <= 0 {
+			effectiveTotalSec = 1
+		}
+
+		uptimePct := math.Round(((effectiveTotalSec-downSec)/effectiveTotalSec*100)*100) / 100
 		if uptimePct > 100 {
 			uptimePct = 100
 		}
@@ -540,6 +558,33 @@ func handleGetIncidents(db *sql.DB) http.HandlerFunc {
 // PUT /api/services/{name}/maintenance
 // ---------------------------------------------------------------------------
 
+// setMaintenanceState is the single write path for toggling a service's
+// maintenance flag, used by both PUT /api/services/{name}/maintenance and
+// the optional `maintenance` field on POST /api/status, so both routes stay
+// in sync on service_maintenance and the maintenance_windows audit trail
+// instead of the two diverging.
+func setMaintenanceState(db *sql.DB, name string, enabled bool, note string) string {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	val := 0
+	if enabled {
+		val = 1
+	}
+	db.Exec(`INSERT INTO service_maintenance (service_name, enabled, note, updated_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(service_name) DO UPDATE SET enabled=?, note=?, updated_at=?`,
+		name, val, note, now, val, note, now)
+
+	if enabled {
+		db.Exec(`INSERT INTO maintenance_windows (service_name, started_at, note) VALUES (?, ?, ?)`,
+			name, now, note)
+	} else {
+		db.Exec(`UPDATE maintenance_windows SET ended_at = ? WHERE service_name = ? AND ended_at IS NULL`,
+			now, name)
+	}
+
+	return now
+}
+
 func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -552,23 +597,8 @@ func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
-		now := time.Now().UTC().Format(time.RFC3339)
 
-		val := 0
-		if req.Enabled {
-			val = 1
-		}
-		db.Exec(`INSERT INTO service_maintenance (service_name, enabled, note, updated_at)
-			VALUES (?, ?, ?, ?) ON CONFLICT(service_name) DO UPDATE SET enabled=?, note=?, updated_at=?`,
-			name, val, req.Note, now, val, req.Note, now)
-
-		if req.Enabled {
-			db.Exec(`INSERT INTO maintenance_windows (service_name, started_at, note) VALUES (?, ?, ?)`,
-				name, now, req.Note)
-		} else {
-			db.Exec(`UPDATE maintenance_windows SET ended_at = ? WHERE service_name = ? AND ended_at IS NULL`,
-				now, name)
-		}
+		now := setMaintenanceState(db, name, req.Enabled, req.Note)
 
 		writeJSON(w, http.StatusOK, ServiceMaintenance{
 			ServiceName: name,
@@ -624,214 +654,6 @@ func seedDemoData(db *sql.DB) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Compute real 7-day uptime for the services list endpoint
-// ---------------------------------------------------------------------------
-
-func computeUptime7d(db *sql.DB, serviceName string) float64 {
-	now := time.Now().UTC()
-	since := now.Add(-7 * 24 * time.Hour)
-
-	events, err := fetchEvents(db, serviceName, since)
-	if err != nil {
-		return 0
-	}
-	prior := fetchLastEventBefore(db, serviceName, since)
-	timeline := buildTimeline(prior, events, since)
-
-	totalSec := now.Sub(since).Seconds()
-	if totalSec <= 0 {
-		return 100
-	}
-
-	var downSec float64
-	for i, s := range timeline {
-		var end time.Time
-		if i+1 < len(timeline) {
-			end = timeline[i+1].start
-		} else {
-			end = now
-		}
-		dur := end.Sub(s.start).Seconds()
-		if dur < 0 {
-			dur = 0
-		}
-		if isDown(s.status) {
-			downSec += dur
-		}
-	}
-
-	pct := math.Round(((totalSec-downSec)/totalSec*100)*100) / 100
-	if pct > 100 {
-		pct = 100
-	}
-	if pct < 0 {
-		pct = 0
-	}
-	return pct
-}
-
-// ---------------------------------------------------------------------------
-// Webhook helper
-// ---------------------------------------------------------------------------
-
-func fireWebhook(cfg *Config, serviceName, prevStatus, newStatus, message string, timestamp time.Time) {
-	if cfg.WebhookURL == "" {
-		return
-	}
-	payload := map[string]interface{}{
-		"type":            "status_change",
-		"service_name":    serviceName,
-		"previous_status": prevStatus,
-		"new_status":      newStatus,
-		"message":         message,
-		"timestamp":       timestamp.Format(time.RFC3339),
-	}
-	var body []byte
-	if strings.Contains(cfg.WebhookURL, "discord.com/api/webhooks") {
-		msg := fmt.Sprintf("**%s** status changed: `%s` -> `%s`\n> %s", serviceName, prevStatus, newStatus, message)
-		body, _ = json.Marshal(map[string]string{"content": msg})
-	} else {
-		body, _ = json.Marshal(payload)
-	}
-
-	go func() {
-		resp, err := http.Post(cfg.WebhookURL, "application/json", bytes.NewBuffer(body))
-		if err != nil {
-			log.Printf("Webhook error: %v", err)
-		} else {
-			resp.Body.Close()
-		}
-	}()
-}
-
-func computeUptime30d(db *sql.DB, serviceName string) float64 {
-	now := time.Now().UTC()
-	since := now.Add(-30 * 24 * time.Hour)
-
-	events, err := fetchEvents(db, serviceName, since)
-	if err != nil {
-		return 0
-	}
-	prior := fetchLastEventBefore(db, serviceName, since)
-	timeline := buildTimeline(prior, events, since)
-
-	totalSec := now.Sub(since).Seconds()
-	if totalSec <= 0 {
-		return 100
-	}
-
-	var downSec float64
-	for i, s := range timeline {
-		var end time.Time
-		if i+1 < len(timeline) {
-			end = timeline[i+1].start
-		} else {
-			end = now
-		}
-		dur := end.Sub(s.start).Seconds()
-		if dur < 0 {
-			dur = 0
-		}
-		if isDown(s.status) {
-			downSec += dur
-		}
-	}
-	pct := ((totalSec - downSec) / totalSec) * 100
-	if pct < 0 {
-		pct = 0
-	}
-	// Round to 1 decimal place
-	return float64(int(pct*10)) / 10
-}
-
-func computeHistoryBuckets(db *sql.DB, name string) []StatusBucket {
-	since := time.Now().UTC().Add(-720 * time.Hour)
-	now := time.Now().UTC()
-	bucketDur := (720 * time.Hour) / 30
-	numBuckets := 30
-	buckets := make([]StatusBucket, 0, numBuckets)
-
-	events, err := fetchEvents(db, name, since)
-	if err != nil {
-		for i := 0; i < numBuckets; i++ {
-			bStart := since.Add(time.Duration(i) * bucketDur)
-			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
-		}
-		return buckets
-	}
-	prior := fetchLastEventBefore(db, name, since)
-	timeline := buildTimeline(prior, events, since)
-
-	for i := 0; i < numBuckets; i++ {
-		bStart := since.Add(time.Duration(i) * bucketDur)
-		bEnd := bStart.Add(bucketDur)
-		if bEnd.After(now) {
-			bEnd = now
-		}
-		bDur := bEnd.Sub(bStart).Seconds()
-		if bDur <= 0 {
-			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
-			continue
-		}
-
-		statusTime := map[string]float64{}
-		bs := statusAtTime(timeline, bStart)
-		cursor := bStart
-		var nextIdx int
-		for j, seg := range timeline {
-			if seg.start.After(bStart) {
-				nextIdx = j
-				break
-			}
-		}
-		if nextIdx == 0 && (len(timeline) == 0 || timeline[0].start.After(bStart)) {
-			nextIdx = len(timeline)
-		}
-
-		for cursor.Before(bEnd) {
-			var segEnd time.Time
-			if nextIdx < len(timeline) {
-				segEnd = timeline[nextIdx].start
-			} else {
-				segEnd = now
-			}
-			if segEnd.After(bEnd) {
-				segEnd = bEnd
-			}
-			d := segEnd.Sub(cursor).Seconds()
-			if d > 0 {
-				statusTime[bs] += d
-			}
-			cursor = segEnd
-			if nextIdx < len(timeline) {
-				bs = timeline[nextIdx].status
-				nextIdx++
-			} else {
-				break
-			}
-		}
-
-		dom := "unknown"
-		maxT := -1.0
-		for st, t := range statusTime {
-			if t > maxT {
-				maxT = t
-				dom = st
-			}
-		}
-		if maxT <= 0 {
-			dom = "unknown"
-		} else if dom != "up" && isInMaintenance(db, name, bStart) {
-			dom = "maintenance"
-		} else if dom == "degraded" {
-			// keep degraded
-		}
-		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
-	}
-	return buckets
-}
-
 // computeServiceMetricsUnified computes 7d uptime, 30d uptime, and 30-day daily status buckets
 // in a single pass over 30 days of data, reducing redundant SQL queries and heap allocations by ~70%.
 func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
@@ -855,7 +677,7 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		totalSec7d = 1
 	}
 
-	var downSec30d, downSec7d float64
+	var downSec30d, downSec7d, emptySec30d, emptySec7d float64
 
 	for i, s := range timeline {
 		var end time.Time
@@ -873,24 +695,42 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 			dur30d = 0
 		}
 
+		segStart7d := s.start
+		if segStart7d.Before(since7d) {
+			segStart7d = since7d
+		}
+		var dur7d float64
+		if end.After(since7d) {
+			dur7d = end.Sub(segStart7d).Seconds()
+			if dur7d < 0 {
+				dur7d = 0
+			}
+		}
+
+		if s.status == "empty" {
+			// Service didn't exist yet for this stretch; exclude it from
+			// both denominators instead of counting it as up.
+			emptySec30d += dur30d
+			emptySec7d += dur7d
+			continue
+		}
+
 		if isDown(s.status) {
 			downSec30d += dur30d
-
-			// Calculate overlap with last 7 days
-			segStart7d := s.start
-			if segStart7d.Before(since7d) {
-				segStart7d = since7d
-			}
-			if end.After(since7d) {
-				dur7d := end.Sub(segStart7d).Seconds()
-				if dur7d > 0 {
-					downSec7d += dur7d
-				}
-			}
+			downSec7d += dur7d
 		}
 	}
 
-	pct30d := math.Round(((totalSec30d-downSec30d)/totalSec30d*100)*10) / 10
+	effectiveTotalSec30d := totalSec30d - emptySec30d
+	if effectiveTotalSec30d <= 0 {
+		effectiveTotalSec30d = 1
+	}
+	effectiveTotalSec7d := totalSec7d - emptySec7d
+	if effectiveTotalSec7d <= 0 {
+		effectiveTotalSec7d = 1
+	}
+
+	pct30d := math.Round(((effectiveTotalSec30d-downSec30d)/effectiveTotalSec30d*100)*10) / 10
 	if pct30d > 100 {
 		pct30d = 100
 	}
@@ -898,7 +738,7 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		pct30d = 0
 	}
 
-	pct7d := math.Round(((totalSec7d-downSec7d)/totalSec7d*100)*100) / 100
+	pct7d := math.Round(((effectiveTotalSec7d-downSec7d)/effectiveTotalSec7d*100)*100) / 100
 	if pct7d > 100 {
 		pct7d = 100
 	}
@@ -962,7 +802,7 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		dom := "unknown"
 		maxT := -1.0
 		for st, t := range statusTime {
-			if t > maxT {
+			if t > maxT || (t == maxT && statusPriority(st) > statusPriority(dom)) {
 				maxT = t
 				dom = st
 			}

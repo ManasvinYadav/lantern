@@ -247,6 +247,10 @@ func cleanupRetention(db *sql.DB, cfg *Config) {
 	queries := []string{
 		"DELETE FROM status_events   WHERE timestamp < datetime('now', '-" + cutoff + " days');",
 		"DELETE FROM diagnostic_runs WHERE timestamp < datetime('now', '-" + cutoff + " days');",
+		// Only prune completed windows (ended_at set); a still-active
+		// window (ended_at IS NULL) must never be deleted regardless of
+		// how long ago it started.
+		"DELETE FROM maintenance_windows WHERE ended_at IS NOT NULL AND ended_at < datetime('now', '-" + cutoff + " days');",
 	}
 	for _, q := range queries {
 		if _, err := db.Exec(q); err != nil {
@@ -381,6 +385,11 @@ type StatusEventRequest struct {
 	Message     string `json:"message"`
 	Timestamp   string `json:"timestamp"` // RFC 3339; optional, defaults to now
 	GroupName   string `json:"group_name,omitempty"`
+	// Maintenance is an optional convenience: when present, toggles
+	// service_maintenance in the same call as the status push, so a client
+	// doesn't need a separate PUT /maintenance request. Omitted (nil)
+	// leaves the current maintenance state untouched.
+	Maintenance *bool `json:"maintenance,omitempty"`
 }
 
 // ServiceSummary is a single item returned by GET /api/services.
@@ -864,6 +873,14 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 				req.ServiceName, strings.TrimSpace(req.GroupName))
 		}
 
+		// Apply an optional maintenance toggle before ingesting the status
+		// event, so ingestStatusEvent's own maintenance check (which
+		// suppresses webhook dispatch while in maintenance) sees the
+		// up-to-date state for this same request.
+		if req.Maintenance != nil {
+			setMaintenanceState(db, req.ServiceName, *req.Maintenance, "")
+		}
+
 		id, err := ingestStatusEvent(db, cfg, dispatcher, hub, req.ServiceName, req.Status, req.Message, ts)
 		if err != nil {
 			log.Printf("handlePostStatus db error: %v", err)
@@ -908,11 +925,19 @@ func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, h
 // Returns the most recent status event for every known service.
 func handleGetServices(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Single joined query: service_groups, service_maintenance, and
+		// active_monitors are all resolved here instead of a per-row
+		// maintenance lookup in the loop (was N+1 — one extra query per
+		// service on every dashboard poll).
 		rows, err := db.Query(`
-SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, ''), COALESCE(m.monitor_type, '')
+SELECT s.service_name, s.status, s.message, s.timestamp,
+       COALESCE(g.group_name, ''),
+       COALESCE(m.monitor_type, ''),
+       COALESCE(sm.enabled, 0)
 FROM status_events s
 LEFT JOIN service_groups g ON s.service_name = g.service_name
 LEFT JOIN active_monitors m ON s.service_name = m.service_name AND m.enabled = 1
+LEFT JOIN service_maintenance sm ON s.service_name = sm.service_name
 WHERE s.id IN (
     SELECT MAX(id) FROM status_events GROUP BY service_name
 )
@@ -929,25 +954,20 @@ ORDER BY s.service_name ASC;`)
 		for rows.Next() {
 			var s ServiceSummary
 			var msg sql.NullString
-			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName, &s.MonitorType); err != nil {
+			var maint int
+			if err := rows.Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName, &s.MonitorType, &maint); err != nil {
 				continue
 			}
 			if msg.Valid {
 				s.Message = msg.String
 			}
 			s.LastSeen = s.Timestamp
+			s.Maintenance = maint == 1
 
 			// Calculate Stale
 			t, err := time.Parse(time.RFC3339, s.Timestamp)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
 				s.Stale = true
-			}
-
-			// Maintenance
-			var maint int
-			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", s.ServiceName).Scan(&maint)
-			if maint == 1 {
-				s.Maintenance = true
 			}
 
 			services = append(services, s)
@@ -988,6 +1008,9 @@ func handleGetServiceHistory(db *sql.DB) http.HandlerFunc {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				limit = n
 			}
+		}
+		if limit > 500 {
+			limit = 500
 		}
 		if v := r.URL.Query().Get("offset"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -1193,6 +1216,9 @@ func handleGetDiagnostics(db *sql.DB) http.HandlerFunc {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				limit = n
 			}
+		}
+		if limit > 500 {
+			limit = 500
 		}
 		if v := q.Get("offset"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
