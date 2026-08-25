@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1332,6 +1333,78 @@ LIMIT ?`, limit)
 	}
 }
 
+// ActivityEvent is one row in the cross-service activity feed: either a
+// status change or a webhook delivery attempt.
+type ActivityEvent struct {
+	Type        string `json:"type"` // "status_change" or "webhook_delivery"
+	ServiceName string `json:"service_name"`
+	Status      string `json:"status,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Channel     string `json:"channel,omitempty"`
+	Success     *bool  `json:"success,omitempty"`
+	HTTPStatus  int    `json:"http_status,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Timestamp   string `json:"timestamp"`
+}
+
+// handleGetActivity handles GET /api/activity — a chronological feed of
+// every status change and webhook delivery attempt across all services,
+// merged and sorted by timestamp.
+func handleGetActivity(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := 50
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+				limit = n
+			}
+		}
+
+		events := []ActivityEvent{}
+
+		statusRows, err := db.Query(`SELECT service_name, status, COALESCE(message,''), timestamp FROM status_events ORDER BY id DESC LIMIT ?`, limit)
+		if err != nil {
+			log.Printf("handleGetActivity status_events query error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		for statusRows.Next() {
+			var e ActivityEvent
+			e.Type = "status_change"
+			if err := statusRows.Scan(&e.ServiceName, &e.Status, &e.Message, &e.Timestamp); err != nil {
+				continue
+			}
+			events = append(events, e)
+		}
+		statusRows.Close()
+
+		whRows, err := db.Query(`SELECT channel, service_name, success, COALESCE(http_status,0), COALESCE(error,''), created_at FROM webhook_deliveries ORDER BY id DESC LIMIT ?`, limit)
+		if err != nil {
+			log.Printf("handleGetActivity webhook_deliveries query error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		for whRows.Next() {
+			var e ActivityEvent
+			var success int
+			e.Type = "webhook_delivery"
+			if err := whRows.Scan(&e.Channel, &e.ServiceName, &success, &e.HTTPStatus, &e.Error, &e.Timestamp); err != nil {
+				continue
+			}
+			s := success == 1
+			e.Success = &s
+			events = append(events, e)
+		}
+		whRows.Close()
+
+		sort.Slice(events, func(i, j int) bool { return events[i].Timestamp > events[j].Timestamp })
+		if len(events) > limit {
+			events = events[:limit]
+		}
+
+		writeJSON(w, http.StatusOK, events)
+	}
+}
+
 // GroupSummary represents a service group and the number of services in it.
 type GroupSummary struct {
 	Name  string `json:"name"`
@@ -1433,6 +1506,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/webhooks", handlePutWebhooks(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
+	api.Handle("/activity", handleGetActivity(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 
 	api.Handle("/monitors", handleGetMonitors(db)).Methods(http.MethodGet)

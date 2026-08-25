@@ -1282,19 +1282,35 @@
       <div class="drawer-header">
         <div class="drawer-title">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-secondary)"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-          Diagnostic Runs
+          Diagnostics
         </div>
         <button class="drawer-close" id="diagClose">✕</button>
       </div>
       <div class="drawer-body" style="padding: 16px;">
-        <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
-           <span style="font-size: 13px; color: var(--text-muted)">Filter:</span>
-           <select id="diagFilterSelect" class="btn" style="background: var(--bg); border-color: var(--border);">
-             <option value="">All Services</option>
-           </select>
+        <div class="view-toggle" id="diagTabToggle" style="margin-bottom:16px; align-self:flex-start;">
+          <button type="button" class="view-toggle-btn active" id="diagTabRuns">Diagnostic Runs</button>
+          <button type="button" class="view-toggle-btn" id="diagTabActivity">Activity Log</button>
         </div>
-        <div class="diag-run-list" id="diagList">
-          <!-- JS -->
+
+        <div id="diagRunsPanel">
+          <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+             <span style="font-size: 13px; color: var(--text-muted)">Filter:</span>
+             <select id="diagFilterSelect" class="btn" style="background: var(--bg); border-color: var(--border);">
+               <option value="">All Services</option>
+             </select>
+          </div>
+          <div class="diag-run-list" id="diagList">
+            <!-- JS -->
+          </div>
+        </div>
+
+        <div id="activityLogPanel" style="display:none;">
+          <div style="font-size:11px; color:var(--text-muted); margin-bottom:12px;">
+            A chronological feed of every status change and webhook delivery attempt across all services.
+          </div>
+          <div class="diag-run-list" id="activityLogList">
+            <!-- JS -->
+          </div>
         </div>
       </div>
     </div>
@@ -1342,7 +1358,8 @@
       ws: isPublic ? '/api/public/ws' : '/ws',
       webhookDeliveries: '/api/webhooks/deliveries',
       monitors: '/api/monitors',
-      serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`
+      serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`,
+      activity: '/api/activity'
     };
 
     // Toast System
@@ -1680,6 +1697,9 @@
           state.diagFilter = e.target.value;
           loadDiagnostics();
         });
+
+        document.getElementById('diagTabRuns').addEventListener('click', () => switchDiagTab('runs'));
+        document.getElementById('diagTabActivity').addEventListener('click', () => switchDiagTab('activity'));
 
         // Maintenance Toggle
         document.getElementById('btnToggleMaint').addEventListener('click', async () => {
@@ -2749,6 +2769,63 @@
       const names = [...new Set(state.services.map(s => s.service_name))].sort();
       sel.innerHTML = '<option value="">All Services</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
       sel.value = current;
+    }
+
+    function switchDiagTab(tab) {
+      const runsPanel = document.getElementById('diagRunsPanel');
+      const activityPanel = document.getElementById('activityLogPanel');
+      const tabRuns = document.getElementById('diagTabRuns');
+      const tabActivity = document.getElementById('diagTabActivity');
+      if (tab === 'activity') {
+        runsPanel.style.display = 'none';
+        activityPanel.style.display = 'block';
+        tabActivity.classList.add('active');
+        tabRuns.classList.remove('active');
+        loadActivityLog();
+      } else {
+        runsPanel.style.display = 'block';
+        activityPanel.style.display = 'none';
+        tabRuns.classList.add('active');
+        tabActivity.classList.remove('active');
+      }
+    }
+
+    async function loadActivityLog() {
+      const list = document.getElementById('activityLogList');
+      list.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">Loading activity...</div>';
+      try {
+        const res = await fetch(API.activity + '?limit=75');
+        if (!res.ok) throw new Error('Failed to load activity log');
+        const events = await res.json();
+
+        if (!events || events.length === 0) {
+          list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:24px; background:var(--panel-bg); border-radius:6px;">No activity recorded yet.</div>';
+          return;
+        }
+
+        list.innerHTML = events.map(e => {
+          if (e.type === 'webhook_delivery') {
+            const icon = e.success ? '<span style="color:var(--up);">✓</span>' : '<span style="color:var(--down);">✕</span>';
+            const detail = e.success ? `HTTP ${e.http_status}` : escapeHtml(e.error || 'failed');
+            return `
+              <div class="diag-run-card" style="padding:10px 14px; font-size:12px;">
+                ${icon} <strong>Webhook</strong> · ${escapeHtml(e.channel)} → ${escapeHtml(e.service_name)}
+                <span style="color:var(--text-muted);">${formatTS(e.timestamp)}</span>
+                <div style="color:var(--text-secondary); margin-top:2px;">${detail}</div>
+              </div>`;
+          }
+          const statusColorVar = ['up','down','degraded','unknown'].includes(e.status) ? `var(--${e.status})` : 'var(--text-secondary)';
+          return `
+            <div class="diag-run-card" style="padding:10px 14px; font-size:12px;">
+              <span style="color:${statusColorVar}; font-weight:600;">●</span> <strong>${escapeHtml(e.service_name)}</strong> → ${escapeHtml((e.status || '').toUpperCase())}
+              <span style="color:var(--text-muted);">${formatTS(e.timestamp)}</span>
+              ${e.message ? `<div style="color:var(--text-secondary); margin-top:2px;">${escapeHtml(e.message)}</div>` : ''}
+            </div>`;
+        }).join('');
+      } catch (err) {
+        list.innerHTML = '<div style="color:var(--down); font-size:13px;">Failed to load activity log.</div>';
+        console.error('Error loading activity log:', err);
+      }
     }
 
     async function loadDiagnostics() {
