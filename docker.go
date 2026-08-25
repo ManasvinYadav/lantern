@@ -20,6 +20,14 @@ import (
 
 const dockerSocketPath = "/var/run/docker.sock"
 
+// maxLogFrameSize caps how much of a single Docker log-stream frame we'll
+// allocate up front. frameLen comes straight off the wire as a uint32 (up
+// to ~4GB); a stream-framing desync (or a misbehaving daemon) could claim
+// an implausibly large frame, and make([]byte, frameLen) would try to
+// allocate that much in one shot. The socket is local/trusted-only, so this
+// is defense-in-depth rather than a real remote attack surface.
+const maxLogFrameSize = 10 * 1024 * 1024 // 10MB
+
 // DockerContainerSummary matches the item returned by GET /containers/json.
 type DockerContainerSummary struct {
 	ID      string            `json:"Id"`
@@ -207,6 +215,21 @@ func parseDockerMuxLogs(r io.Reader) string {
 
 		frameLen := binary.BigEndian.Uint32(header[4:8])
 		if frameLen == 0 {
+			continue
+		}
+
+		if frameLen > maxLogFrameSize {
+			// Implausibly large for a real log frame — almost certainly a
+			// stream desync. Copy the first maxLogFrameSize bytes through
+			// (so we don't just drop legitimate-but-huge content) and
+			// discard the declared remainder so the next 8 bytes we read
+			// are the next real frame header, not leftover frame data.
+			if _, err := io.CopyN(&buf, r, int64(maxLogFrameSize)); err != nil {
+				break
+			}
+			if _, err := io.CopyN(io.Discard, r, int64(frameLen)-int64(maxLogFrameSize)); err != nil {
+				break
+			}
 			continue
 		}
 

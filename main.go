@@ -754,11 +754,72 @@ func (d *webhookDispatcher) recordDelivery(job webhookJob, success bool, httpSta
 
 // dispatchWebhooks enqueues one delivery job per configured channel. It
 // returns immediately — actual HTTP calls happen on worker goroutines.
+// discordEmbed and discordEmbedField mirror the subset of Discord's webhook
+// embed schema Lantern uses for status-change alerts.
+type discordEmbed struct {
+	Title     string              `json:"title"`
+	Color     int                 `json:"color"`
+	Fields    []discordEmbedField `json:"fields"`
+	Timestamp string              `json:"timestamp"`
+}
+
+type discordEmbedField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline"`
+}
+
+// discordColorForStatus mirrors the dashboard's own status colors
+// (--up/--down/--degraded/--unknown in static/index.html) so alerts read
+// consistently with the UI.
+func discordColorForStatus(status string) int {
+	switch status {
+	case "up":
+		return 0x10b981
+	case "down":
+		return 0xf43f5e
+	case "degraded":
+		return 0xf59e0b
+	default:
+		return 0x64748b
+	}
+}
+
+// buildDiscordEmbedPayload builds a structured, color-coded embed instead
+// of a plain-text content string, so a status change is scannable at a
+// glance in Discord.
+func buildDiscordEmbedPayload(service, oldStatus, newStatus, message string) []byte {
+	title := "Service Status Change"
+	switch newStatus {
+	case "up":
+		title = "✅ Service Recovered"
+	case "down":
+		title = "🔴 Service Down"
+	case "degraded":
+		title = "🟡 Service Degraded"
+	}
+	if message == "" {
+		message = "—"
+	}
+	embed := discordEmbed{
+		Title: title,
+		Color: discordColorForStatus(newStatus),
+		Fields: []discordEmbedField{
+			{Name: "Service", Value: service, Inline: true},
+			{Name: "Status", Value: fmt.Sprintf("%s → %s", strings.ToUpper(oldStatus), strings.ToUpper(newStatus)), Inline: true},
+			{Name: "Message", Value: message, Inline: false},
+		},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	body, _ := json.Marshal(map[string]any{"embeds": []discordEmbed{embed}})
+	return body
+}
+
 func dispatchWebhooks(dispatcher *webhookDispatcher, db *sql.DB, cfg *Config, service, oldStatus, newStatus, message string) {
 	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
 
 	if discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord"); discordURL != "" {
-		body, _ := json.Marshal(map[string]string{"content": text})
+		body := buildDiscordEmbedPayload(service, oldStatus, newStatus, message)
 		dispatcher.enqueue(webhookJob{channel: "discord", url: discordURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
 	}
 	if telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram"); telegramURL != "" {
