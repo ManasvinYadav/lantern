@@ -25,7 +25,8 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 - **Instant Search & Real-time Filters**: Instant substring search across service names, groups, and messages with empty-state and toast notifications.
 - **Responsive Layout**: Usable down to mobile viewport widths, not just non-overflowing.
 - **Maintenance Mode**: One-click UI toggles to silence alerts and ignore downtime during planned maintenance.
-- **Scoped API Tokens**: Secure ingest and admin management APIs using Bearer tokens while keeping public status routes unauthenticated.
+- **Admin & Scoped API Tokens**: An admin-wide `LANTERN_AUTH_TOKEN` (settable from the dashboard's own Settings drawer) gates writes and Docker controls, plus per-service scoped tokens for automation — all while keeping public status routes unauthenticated.
+- **Prometheus Metrics**: A `/metrics` endpoint for scraping service status, uptime ratios, and incident counts into an existing monitoring stack.
 
 ## Screenshots
 

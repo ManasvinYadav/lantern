@@ -24,12 +24,12 @@
         "authentication": "privateKey",
         "resource": "command",
         "operation": "execute",
-        "command": "bash /home/manasvin/scripts/push_to_lantern.sh",
-        "cwd": "/home/manasvin"
+        "command": "bash /home/YOUR_USER/scripts/push_to_lantern.sh",
+        "cwd": "/home/YOUR_USER"
       },
       "credentials": {
         "sshPrivateKey": {
-          "id": "6cJdFiY6wob2PKJT",
+          "id": "YOUR_N8N_CREDENTIAL_ID",
           "name": "Pi Host SSH"
         }
       },

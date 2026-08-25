@@ -1149,6 +1149,18 @@
         <button class="drawer-close" id="settingsClose">✕</button>
       </div>
       <div class="drawer-body">
+        <!-- Admin API Token Section -->
+        <div>
+          <div class="section-label">Admin API Token</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            Only needed if LANTERN_AUTH_TOKEN or basic auth is configured on the server. Stored in this browser only, sent as an Authorization header on admin actions (maintenance, groups, webhooks, monitors, Docker controls).
+          </div>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <input type="password" class="form-input" id="adminTokenInput" placeholder="Bearer token" style="flex:1;" autocomplete="off" />
+            <button type="button" class="btn" id="btnSaveAdminToken">Save</button>
+          </div>
+        </div>
+
         <!-- Theme Mode Section -->
         <div>
           <div class="section-label">Theme Mode</div>
@@ -1294,7 +1306,7 @@
   </div>
 
   <!-- Diagnostics Drawer -->
-  <div class="drawer-overlay hide-public" id="diagDrawerOverlay" class="drawer-overlay hide-public hidden">
+  <div class="drawer-overlay hide-public" id="diagDrawerOverlay">
     <div class="drawer" id="diagDrawer">
       <div class="drawer-header">
         <div class="drawer-title">
@@ -1552,6 +1564,25 @@
       startPolling();
       connectWS();
 
+      // The uptime graph bakes the container's pixel width into its SVG
+      // viewBox and point coordinates at render time (see renderGraph), so
+      // it doesn't stay correctly proportioned across a window resize or
+      // the service drawer's slide-in transition on its own. Re-render on
+      // actual size changes, debounced so the ~280ms drawer transition
+      // doesn't trigger a re-render on every intermediate frame.
+      const svgContainer = document.querySelector('.svg-container');
+      if (svgContainer && window.ResizeObserver) {
+        let resizeTimer = null;
+        new ResizeObserver(() => {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            if (state.lastUptimeDatapoints) {
+              renderGraph(state.lastUptimeDatapoints, state.uptimeRange);
+            }
+          }, 120);
+        }).observe(svgContainer);
+      }
+
       // Pause polling in background tabs to save battery & eliminate stutter
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
@@ -1726,7 +1757,7 @@
           const btn = document.getElementById('btnToggleMaint');
           const current = btn.innerText === 'Disable';
           try {
-            const res = await fetch(API.maintenance(state.activeService), {
+            const res = await authFetch(API.maintenance(state.activeService), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ enabled: !current, note: 'Toggled via UI' })
@@ -1766,7 +1797,7 @@
             btnSaveGroup.disabled = true;
             btnSaveGroup.innerText = 'Saving...';
             try {
-              const res = await fetch(API.group(state.activeService), {
+              const res = await authFetch(API.group(state.activeService), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ group: groupVal })
@@ -1798,7 +1829,7 @@
             btnDockerRestart.disabled = true;
             btnDockerRestart.innerHTML = 'Restarting...';
             try {
-              const res = await fetch(API.dockerRestart(state.activeService), { method: 'POST' });
+              const res = await authFetch(API.dockerRestart(state.activeService), { method: 'POST' });
               const data = await res.json();
               if (res.ok) {
                 showToast(data.message || 'Container restart initiated', 'success');
@@ -1901,6 +1932,9 @@
         const btnRefreshDeliveries = document.getElementById('btnRefreshDeliveries');
         if (btnRefreshDeliveries) btnRefreshDeliveries.addEventListener('click', loadWebhookDeliveries);
 
+        const btnSaveAdminToken = document.getElementById('btnSaveAdminToken');
+        if (btnSaveAdminToken) btnSaveAdminToken.addEventListener('click', saveAdminToken);
+
         const btnSaveMonitor = document.getElementById('btnSaveMonitor');
         if (btnSaveMonitor) btnSaveMonitor.addEventListener('click', saveActiveMonitor);
 
@@ -1997,9 +2031,23 @@
       openDrawer('settingsDrawerOverlay');
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
       setAccentColor(localStorage.getItem('lantern_accent') || null);
+      const tokenInput = document.getElementById('adminTokenInput');
+      if (tokenInput) tokenInput.value = localStorage.getItem('lantern_admin_token') || '';
       loadWebhookSettings();
       loadWebhookDeliveries();
       loadActiveMonitors();
+    }
+
+    function saveAdminToken() {
+      const input = document.getElementById('adminTokenInput');
+      const token = (input?.value || '').trim();
+      if (token) {
+        localStorage.setItem('lantern_admin_token', token);
+        showToast('Admin token saved', 'success');
+      } else {
+        localStorage.removeItem('lantern_admin_token');
+        showToast('Admin token cleared', 'info');
+      }
     }
 
     async function loadActiveMonitors() {
@@ -2053,7 +2101,7 @@
 
       btn.disabled = true;
       try {
-        const res = await fetch(API.serviceMonitor(name), {
+        const res = await authFetch(API.serviceMonitor(name), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: true })
@@ -2074,7 +2122,7 @@
 
     window.deleteActiveMonitor = async function(name) {
       try {
-        const res = await fetch(API.serviceMonitor(name), { method: 'DELETE' });
+        const res = await authFetch(API.serviceMonitor(name), { method: 'DELETE' });
         if (!res.ok) throw new Error('Failed to remove monitor');
         showToast(`Active monitor removed for ${name}`, 'info');
         await loadActiveMonitors();
@@ -2159,7 +2207,7 @@
       if (statusEl) statusEl.innerText = '';
 
       try {
-        const res = await fetch('/api/webhooks', {
+        const res = await authFetch('/api/webhooks', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -2196,7 +2244,7 @@
       const resBox = document.getElementById('webhookTestResult');
       resBox.innerHTML = '<span style="color:var(--text-muted)">Sending test payload...</span>';
       try {
-        const resp = await fetch('/api/webhooks/test', {
+        const resp = await authFetch('/api/webhooks/test', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ channel })
@@ -2208,21 +2256,21 @@
           for (const [ch, res] of Object.entries(data.results)) {
             const src = res.source ? `[${res.source.toUpperCase()}] ` : '';
             if (!res.attempted) {
-              out += `⚠️ ${ch.toUpperCase()}: ${res.message}\n`;
+              out += `⚠️ ${ch.toUpperCase()}: ${escapeHtml(res.message || '')}\n`;
             } else if (res.success) {
               out += `✅ ${ch.toUpperCase()} ${src}: Dispatched successfully (HTTP ${res.status_code})\n`;
             } else {
-              out += `❌ ${ch.toUpperCase()} ${src}: Failed (${res.message || 'HTTP ' + res.status_code})\n`;
+              out += `❌ ${ch.toUpperCase()} ${src}: Failed (${escapeHtml(res.message || 'HTTP ' + res.status_code)})\n`;
             }
           }
           resBox.innerHTML = out || 'No channels targeted.';
           showToast('Webhook test complete', 'info');
         } else {
-          resBox.innerHTML = `❌ Error: ${data.message || data.error}`;
+          resBox.innerHTML = `❌ Error: ${escapeHtml(data.message || data.error || '')}`;
           showToast('Webhook test failed', 'error');
         }
       } catch (e) {
-        resBox.innerHTML = `<span style="color:var(--down)">Request Failed: ${e.message}</span>`;
+        resBox.innerHTML = `<span style="color:var(--down)">Request Failed: ${escapeHtml(e.message)}</span>`;
         showToast('Webhook test request failed', 'error');
       }
     }
@@ -2702,7 +2750,7 @@
       if (isPublic) return;
 
       try {
-        const res = await fetch(API.dockerStatus(name));
+        const res = await authFetch(API.dockerStatus(name));
         if (!res.ok) return;
         const d = await res.json();
         if (d.available && d.detected) {
@@ -2726,7 +2774,7 @@
       pre.innerText = 'Fetching live log tail...';
 
       try {
-        const res = await fetch(API.dockerLogs(name, tail));
+        const res = await authFetch(API.dockerLogs(name, tail));
         if (!res.ok) {
           const err = await res.json();
           pre.innerText = `Error: ${err.error || 'Failed to fetch logs'}`;
@@ -3027,6 +3075,20 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    // Drop-in replacement for fetch() that attaches the admin bearer token
+    // (if one is set in Settings) as an Authorization header. Only needed
+    // on routes the backend treats as mutating/administrative once
+    // LANTERN_AUTH_TOKEN or LANTERN_AUTH_USER is configured — see
+    // isProtectedEndpoint in main.go. Harmless no-op when no token is set.
+    function authFetch(url, options = {}) {
+      const token = localStorage.getItem('lantern_admin_token');
+      if (!token) return fetch(url, options);
+      return fetch(url, {
+        ...options,
+        headers: { ...(options.headers || {}), 'Authorization': `Bearer ${token}` }
+      });
     }
   </script>
 </body>

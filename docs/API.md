@@ -1,8 +1,8 @@
 # API Reference
 
-Lantern operates primarily via a push-based heartbeat system. Below is a comprehensive list of all endpoints.
+Lantern operates primarily via a push-based heartbeat system, with optional active monitoring as an alternative. Below is a comprehensive list of endpoints. See also `GET /api/docs`, a live reference page generated from the actual route table.
 
-> **Note**: All POST endpoints are secured if `LANTERN_AUTH_TOKEN` is set. Pass the token as `Authorization: Bearer <TOKEN>`.
+> **Note**: Once `LANTERN_AUTH_TOKEN` or `LANTERN_AUTH_USER`/`LANTERN_AUTH_PASS` is set, mutating and administrative routes require auth — not just `POST` — including both `GET` endpoints under `/api/services/{name}/docker/*`, since they expose container internals and log content. Pass the token as `Authorization: Bearer <TOKEN>`. See [Configuration Guide](CONFIG.md#security--authentication) for the exact route list.
 
 ---
 
@@ -112,3 +112,28 @@ curl -X POST http://localhost:7654/api/webhooks/test \
   -d '{"channel": "all"}'
 ```
 *(Valid channels: `all`, `discord`, `telegram`, `gotify`, `generic`)*
+
+---
+
+## `GET /metrics`
+Prometheus text-exposition-format metrics. Always unauthenticated (exposes the same data as `/api/public/services`).
+
+**Request:**
+```bash
+curl -s http://localhost:7654/metrics
+```
+
+**Metrics exported:**
+- `lantern_service_status{service,group}` — `1` if up, else `0`.
+- `lantern_service_uptime_ratio{service,range="7d"|"30d"}` — 0–1.
+- `lantern_incident_count{service}` — distinct down/degraded incidents in the last 30 days.
+
+---
+
+## `GET /api/backup`
+Downloads a consistent database snapshot (`VACUUM INTO`), safe to fetch even under concurrent writes. See [Backup & Restore](BACKUP.md).
+
+---
+
+## `GET /api/services/{name}/export?format=csv|json`
+Downloads a service's full retained status history.
