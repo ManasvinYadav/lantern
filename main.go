@@ -50,6 +50,7 @@ type Config struct {
 	AuthEnabled     bool   // true when LANTERN_AUTH_USER is non-empty
 	AuthUser        string // LANTERN_AUTH_USER
 	AuthPass        string // LANTERN_AUTH_PASS
+	AuthToken       string // LANTERN_AUTH_TOKEN — admin-wide bearer token
 	StaleHours      int
 	WebhookURL      string
 	DemoMode        bool
@@ -67,7 +68,8 @@ func loadConfig() *Config {
 		RetentionDays:   getEnvInt("LANTERN_RETENTION_DAYS", 30),
 		AuthUser:        os.Getenv("LANTERN_AUTH_USER"),
 		AuthPass:        os.Getenv("LANTERN_AUTH_PASS"),
-		StaleHours:      getEnvInt("LANTERN_STALE_HOURS", 2),
+		AuthToken:       os.Getenv("LANTERN_AUTH_TOKEN"),
+		StaleHours:      getEnvInt("LANTERN_STALE_HOURS", 24),
 		WebhookURL:      os.Getenv("LANTERN_WEBHOOK_URL"),
 		DemoMode:        os.Getenv("LANTERN_DEMO") == "true",
 		WebhookDiscord:  os.Getenv("LANTERN_WEBHOOK_DISCORD"),
@@ -267,6 +269,50 @@ func runRetentionCleanup(db *sql.DB, cfg *Config) {
 // Middleware
 // ---------------------------------------------------------------------------
 
+// contextKey is a private type for context values so Lantern's keys can
+// never collide with keys set by other packages using plain strings.
+type contextKey string
+
+const (
+	scopedServiceKey contextKey = "scoped_service"
+	isAdminKey       contextKey = "is_admin"
+)
+
+// isProtectedEndpoint reports whether a request targets a mutating or
+// administrative route that should require authentication once one is
+// configured (LANTERN_AUTH_TOKEN or LANTERN_AUTH_USER). Everything else —
+// dashboard reads like /api/services, /api/groups, uptime/strip/incidents,
+// webhook config reads — stays open, matching LANTERN_AUTH_TOKEN's documented
+// purpose of securing writes rather than gating the whole read surface.
+func isProtectedEndpoint(r *http.Request) bool {
+	path := r.URL.Path
+	method := r.Method
+
+	// All Docker control endpoints, including reads (status/logs expose
+	// container internals and log content).
+	if strings.Contains(path, "/docker/") {
+		return true
+	}
+
+	switch {
+	case path == "/api/status" && method == http.MethodPost:
+		return true
+	case path == "/api/diagnostics" && method == http.MethodPost:
+		return true
+	case path == "/api/webhooks" && (method == http.MethodPut || method == http.MethodPost):
+		return true
+	case path == "/api/webhooks/test" && method == http.MethodPost:
+		return true
+	case strings.HasSuffix(path, "/group") && method != http.MethodGet:
+		return true
+	case strings.HasSuffix(path, "/maintenance") && method != http.MethodGet:
+		return true
+	case strings.HasSuffix(path, "/monitor") && method != http.MethodGet:
+		return true
+	}
+	return false
+}
+
 // authMiddleware enforces HTTP Basic Auth or Bearer tokens.
 func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,25 +324,40 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
+
+			if cfg.AuthToken != "" && token == cfg.AuthToken {
+				ctx := context.WithValue(r.Context(), isAdminKey, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			var serviceName string
 			err := db.QueryRow("SELECT service_name FROM api_tokens WHERE token = ?", token).Scan(&serviceName)
 			if err == nil {
-				ctx := context.WithValue(r.Context(), "scoped_service", serviceName)
+				ctx := context.WithValue(r.Context(), scopedServiceKey, serviceName)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 		}
 
-		if !cfg.AuthEnabled {
-			next.ServeHTTP(w, r)
+		if cfg.AuthEnabled {
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != cfg.AuthUser || pass != cfg.AuthPass {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Lantern"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			ctx := context.WithValue(r.Context(), isAdminKey, true)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != cfg.AuthUser || pass != cfg.AuthPass {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Lantern"`)
+
+		if cfg.AuthToken != "" && isProtectedEndpoint(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -791,7 +852,7 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 
 		ts := parseTimestamp(req.Timestamp)
 
-		scopedSvc := r.Context().Value("scoped_service")
+		scopedSvc := r.Context().Value(scopedServiceKey)
 		if scopedSvc != nil && scopedSvc.(string) != req.ServiceName {
 			writeError(w, http.StatusForbidden, "token not scoped for this service")
 			return
@@ -1095,7 +1156,7 @@ func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 
 		ts := parseTimestamp(req.Timestamp)
 
-		scopedSvc := r.Context().Value("scoped_service")
+		scopedSvc := r.Context().Value(scopedServiceKey)
 		if scopedSvc != nil && scopedSvc.(string) != req.ServiceName {
 			writeError(w, http.StatusForbidden, "token not scoped for this service")
 			return
@@ -1554,7 +1615,7 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		scopedSvc := r.Context().Value("scoped_service")
+		scopedSvc := r.Context().Value(scopedServiceKey)
 		if scopedSvc != nil && scopedSvc.(string) != name {
 			writeError(w, http.StatusForbidden, "token not scoped for this service")
 			return
@@ -1668,22 +1729,39 @@ type gzipResponseWriter struct {
 	io.Writer
 	http.ResponseWriter
 	wroteHeader bool
+	// skipGzip is set when the response status has no body (204/304); the
+	// status is written straight through to the real ResponseWriter so a
+	// gzip.Writer that was never given any bytes to compress doesn't still
+	// emit an empty gzip stream's header/footer bytes into a body-less
+	// response, which would corrupt the HTTP framing.
+	skipGzip bool
 }
 
 func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.Header().Del("Content-Length")
 		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding") // Add, not Set: CORS may have already set Vary: Origin
 		w.ResponseWriter.WriteHeader(http.StatusOK)
 		w.wroteHeader = true
+	}
+	if w.skipGzip {
+		return w.ResponseWriter.Write(b)
 	}
 	return w.Writer.Write(b)
 }
 
 func (w *gzipResponseWriter) WriteHeader(code int) {
 	if !w.wroteHeader {
+		if code == http.StatusNoContent || code == http.StatusNotModified {
+			w.skipGzip = true
+			w.ResponseWriter.WriteHeader(code)
+			w.wroteHeader = true
+			return
+		}
 		w.Header().Del("Content-Length")
 		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding") // Add, not Set: CORS may have already set Vary: Origin
 		w.ResponseWriter.WriteHeader(code)
 		w.wroteHeader = true
 	}
@@ -1705,10 +1783,12 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		gz := gzipWriterPool.Get().(*gzip.Writer)
 		defer gzipWriterPool.Put(gz)
 		gz.Reset(w)
-		defer gz.Close()
 
 		gzw := &gzipResponseWriter{Writer: gz, ResponseWriter: w}
 		next.ServeHTTP(gzw, r)
+		if !gzw.skipGzip {
+			gz.Close()
+		}
 	})
 }
 

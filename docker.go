@@ -41,10 +41,10 @@ type DockerContainerSummary struct {
 
 // DockerInspectResponse matches subset of GET /containers/{id}/json.
 type DockerInspectResponse struct {
-	ID      string `json:"Id"`
-	Created string `json:"Created"`
-	Name    string `json:"Name"`
-	Path    string `json:"Path"`
+	ID      string   `json:"Id"`
+	Created string   `json:"Created"`
+	Name    string   `json:"Name"`
+	Path    string   `json:"Path"`
 	Args    []string `json:"Args"`
 	State   struct {
 		Status     string `json:"Status"`
@@ -63,19 +63,19 @@ type DockerInspectResponse struct {
 			FailingStreak int    `json:"FailingStreak"`
 		} `json:"Health"`
 	} `json:"State"`
-	Image           string `json:"Image"`
-	RestartCount    int    `json:"RestartCount"`
-	Platform        string `json:"Platform"`
-	HostConfig      struct {
+	Image        string `json:"Image"`
+	RestartCount int    `json:"RestartCount"`
+	Platform     string `json:"Platform"`
+	HostConfig   struct {
 		RestartPolicy struct {
 			Name string `json:"Name"`
 		} `json:"RestartPolicy"`
 	} `json:"HostConfig"`
 	Config struct {
-		Image      string              `json:"Image"`
-		Env        []string            `json:"Env"`
-		WorkingDir string              `json:"WorkingDir"`
-		Labels     map[string]string   `json:"Labels"`
+		Image      string            `json:"Image"`
+		Env        []string          `json:"Env"`
+		WorkingDir string            `json:"WorkingDir"`
+		Labels     map[string]string `json:"Labels"`
 	} `json:"Config"`
 	NetworkSettings struct {
 		IPAddress string `json:"IPAddress"`
@@ -285,7 +285,7 @@ func handlePostDockerRestart(db *sql.DB) http.HandlerFunc {
 		vars := mux.Vars(r)
 		name := strings.TrimSpace(vars["name"])
 
-		scopedSvc := r.Context().Value("scoped_service")
+		scopedSvc := r.Context().Value(scopedServiceKey)
 		if scopedSvc != nil && scopedSvc.(string) != name {
 			writeError(w, http.StatusForbidden, "token not scoped for this service")
 			return
@@ -340,7 +340,7 @@ func handleGetDockerLogs() http.HandlerFunc {
 		vars := mux.Vars(r)
 		name := strings.TrimSpace(vars["name"])
 
-		scopedSvc := r.Context().Value("scoped_service")
+		scopedSvc := r.Context().Value(scopedServiceKey)
 		if scopedSvc != nil && scopedSvc.(string) != name {
 			writeError(w, http.StatusForbidden, "token not scoped for this service")
 			return
@@ -420,9 +420,9 @@ type MountMapping struct {
 
 // ServiceMetadataResponse combines Docker inspect details and Lantern internal telemetry.
 type ServiceMetadataResponse struct {
-	ServiceName   string `json:"service_name"`
-	GroupName     string `json:"group_name"`
-	Type          string `json:"type"` // "docker" | "host"
+	ServiceName    string `json:"service_name"`
+	GroupName      string `json:"group_name"`
+	Type           string `json:"type"` // "docker" | "host"
 	DockerDetected bool   `json:"docker_detected"`
 
 	// Docker specific details
