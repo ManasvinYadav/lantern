@@ -59,6 +59,11 @@ type Config struct {
 	WebhookTelegram string
 	WebhookGotify   string
 	WebhookGeneric  string
+	// DockerDiscovery enables the native container poller. On by default:
+	// if the socket is mounted, Lantern should just work.
+	DockerDiscovery bool // LANTERN_DOCKER_DISCOVERY, default true
+	// DockerPollSeconds is how often the daemon is polled, floored at 10.
+	DockerPollSeconds int // LANTERN_DOCKER_POLL_SECONDS, default 60
 }
 
 // loadConfig reads configuration from environment variables and applies defaults.
@@ -77,9 +82,19 @@ func loadConfig() *Config {
 		WebhookTelegram: os.Getenv("LANTERN_WEBHOOK_TELEGRAM"),
 		WebhookGotify:   os.Getenv("LANTERN_WEBHOOK_GOTIFY"),
 		WebhookGeneric:  os.Getenv("LANTERN_WEBHOOK_GENERIC"),
+
+		// Only the literal "false" disables discovery, so an unset or
+		// misspelled value leaves the dashboard working rather than silent.
+		DockerDiscovery:   os.Getenv("LANTERN_DOCKER_DISCOVERY") != "false",
+		DockerPollSeconds: getEnvInt("LANTERN_DOCKER_POLL_SECONDS", 60),
 	}
 	// Auth is enabled implicitly when a username is configured.
 	cfg.AuthEnabled = cfg.AuthUser != ""
+
+	// Floor the interval so a typo (or 0) cannot hammer the Docker daemon.
+	if cfg.DockerPollSeconds < 10 {
+		cfg.DockerPollSeconds = 10
+	}
 	return cfg
 }
 
@@ -2202,6 +2217,9 @@ func main() {
 
 	// Background worker for missing heartbeats
 	go runStaleChecker(db, cfg, dispatcher, hub)
+
+	// Background worker that discovers and polls local Docker containers
+	go runDockerDiscovery(db, cfg, dispatcher, hub)
 
 	router := setupRoutes(db, cfg, dispatcher, hub, scheduler)
 

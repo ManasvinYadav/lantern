@@ -585,3 +585,159 @@ func handleGetServiceMetadata(db *sql.DB) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, meta)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Native container discovery
+// ---------------------------------------------------------------------------
+
+// dockerHealthFromStatus extracts the healthcheck verdict Docker embeds in the
+// human-readable Status line ("Up 4 days (healthy)"). Returns "" when the
+// container declares no healthcheck, which is not the same as being unhealthy.
+func dockerHealthFromStatus(status string) string {
+	s := strings.ToLower(status)
+	switch {
+	case strings.Contains(s, "(healthy)"):
+		return "healthy"
+	case strings.Contains(s, "(unhealthy)"):
+		return "unhealthy"
+	case strings.Contains(s, "health: starting"):
+		return "starting"
+	}
+	return ""
+}
+
+// dockerStatusFor maps a container's Docker state and status line onto a
+// Lantern status and a human message.
+//
+// A running container whose healthcheck has not yet passed reports "degraded"
+// rather than "up": during warm-up the container is not yet serving, and
+// claiming otherwise would paint a green card for something still booting.
+// A container with no healthcheck at all is taken at its word and reports up.
+//
+// The Docker status line is already human-readable ("Exited (0) 4 hours ago"),
+// so it is carried through verbatim as the message.
+func dockerStatusFor(state, status string) (string, string) {
+	msg := strings.TrimSpace(status)
+	if msg == "" {
+		msg = "state: " + state
+	}
+
+	switch state {
+	case "running":
+		switch dockerHealthFromStatus(status) {
+		case "unhealthy", "starting":
+			return "degraded", msg
+		}
+		return "up", msg
+	case "restarting", "paused":
+		return "degraded", msg
+	case "exited", "dead", "created", "removing":
+		return "down", msg
+	default:
+		return "unknown", msg
+	}
+}
+
+// dockerServiceName picks the name Lantern records for a container: the first
+// non-empty entry in Names, minus the leading slash Docker prefixes. Falls
+// back to a short container ID so an unnamed container is still tracked.
+func dockerServiceName(c DockerContainerSummary) string {
+	for _, n := range c.Names {
+		if t := strings.TrimPrefix(strings.TrimSpace(n), "/"); t != "" {
+			return t
+		}
+	}
+	if len(c.ID) >= 12 {
+		return c.ID[:12]
+	}
+	return c.ID
+}
+
+// dockerDiscoveryIgnored reports whether a container has opted out of
+// discovery via the lantern.ignore label.
+func dockerDiscoveryIgnored(labels map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(labels["lantern.ignore"]), "true")
+}
+
+// runDockerDiscovery polls the local Docker daemon on an interval and records
+// a heartbeat for every container it finds, so Lantern populates itself with
+// no external push script. Containers are auto-registered simply by being
+// ingested: the service list is derived from status_events.
+//
+// Intended to be started with `go` from main().
+func runDockerDiscovery(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) {
+	if !cfg.DockerDiscovery {
+		log.Printf("docker discovery: disabled via LANTERN_DOCKER_DISCOVERY")
+		return
+	}
+	if !isDockerSocketAvailable() {
+		log.Printf("docker discovery: %s unavailable, discovery inactive", dockerSocketPath)
+		return
+	}
+
+	interval := time.Duration(cfg.DockerPollSeconds) * time.Second
+	client := getDockerHTTPClient()
+	log.Printf("docker discovery: active, polling every %s", interval)
+
+	// One pass immediately, so a restart repopulates the dashboard without
+	// waiting out a full interval first.
+	dockerDiscoveryPass(client, db, cfg, dispatcher, hub)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		dockerDiscoveryPass(client, db, cfg, dispatcher, hub)
+	}
+}
+
+// dockerDiscoveryPass performs a single discovery poll. Every container comes
+// back in one /containers/json call, so this is one request per tick
+// regardless of how many containers the host runs.
+func dockerDiscoveryPass(client *http.Client, db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) {
+	start := time.Now()
+
+	resp, err := client.Get("http://localhost/containers/json?all=1")
+	if err != nil {
+		log.Printf("docker discovery: list failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Printf("docker discovery: docker api error (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return
+	}
+
+	var containers []DockerContainerSummary
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		log.Printf("docker discovery: decode failed: %v", err)
+		return
+	}
+
+	// One measurement for the whole batch. This is the cost of the daemon
+	// query itself, shared by every container in the response — it is not a
+	// per-container probe time, and should not be read as one.
+	latencyMs := time.Since(start).Milliseconds()
+
+	now := time.Now().UTC()
+	recorded, skipped := 0, 0
+	for _, c := range containers {
+		if dockerDiscoveryIgnored(c.Labels) {
+			skipped++
+			continue
+		}
+		name := dockerServiceName(c)
+		if name == "" {
+			continue
+		}
+		status, message := dockerStatusFor(c.State, c.Status)
+		if _, err := ingestStatusEvent(db, cfg, dispatcher, hub, name, status, message, now, latencyMs); err != nil {
+			log.Printf("docker discovery: failed to record %s: %v", name, err)
+			continue
+		}
+		recorded++
+	}
+
+	log.Printf("docker discovery: recorded %d container(s), ignored %d, daemon query %dms", recorded, skipped, latencyMs)
+}
