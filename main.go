@@ -2058,7 +2058,10 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 
 	// --- Public SVG status badge (registered before the /api subrouter so
 	// jsonMiddleware does not overwrite Content-Type with application/json) ---
-	r.Handle("/api/badge/{service}.svg", handleBadge(db)).Methods(http.MethodGet)
+	// HEAD is registered explicitly: gorilla/mux matches on method, so a
+	// GET-only route 404s the HEAD requests that link checkers and some
+	// markdown renderers send at an embedded badge.
+	r.Handle("/api/badge/{service}.svg", handleBadge(db)).Methods(http.MethodGet, http.MethodHead)
 
 	// --- API routes ---
 	api := r.PathPrefix("/api").Subrouter()
