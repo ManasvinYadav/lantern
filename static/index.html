@@ -1109,6 +1109,17 @@
           </div>
           <div id="webhookTestResult" style="font-size:12px; color:var(--text-secondary); white-space:pre-wrap; max-height:140px; overflow-y:auto; font-family:var(--font-mono); margin-top:10px; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; min-height:36px;"></div>
         </div>
+
+        <!-- Recent Delivery Log Section -->
+        <div style="padding-top:16px; border-top:1px solid var(--border);">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="section-label">Recent Delivery Log</div>
+            <button type="button" class="btn" id="btnRefreshDeliveries" style="font-size:11px; padding:4px 10px;">Refresh</button>
+          </div>
+          <div id="webhookDeliveryLog" style="font-size:12px; font-family:var(--font-mono); margin-top:8px; max-height:180px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
+            <span style="color:var(--text-muted);">No deliveries yet.</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1175,7 +1186,9 @@
       metadata: (name) => isPublic ? `/api/public/services/${encodeURIComponent(name)}/metadata` : `/api/services/${encodeURIComponent(name)}/metadata`,
       dockerStatus: (name) => `/api/services/${encodeURIComponent(name)}/docker/status`,
       dockerRestart: (name) => `/api/services/${encodeURIComponent(name)}/docker/restart`,
-      dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`
+      dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`,
+      ws: isPublic ? '/api/public/ws' : '/ws',
+      webhookDeliveries: '/api/webhooks/deliveries'
     };
 
     // Toast System
@@ -1209,14 +1222,102 @@
       }
     }
 
+    // ---------------------------------------------------------------------
+    // Real-time WebSocket push
+    //
+    // Cards update the moment a status event arrives, instead of waiting for
+    // the polling timer. Polling stays on as a periodic sanity-check/fallback
+    // and the manual refresh button always force-refreshes over REST.
+    // ---------------------------------------------------------------------
+    let ws = null;
+    let wsReconnectAttempts = 0;
+    let wsReconnectTimer = null;
+
+    function wsUrl(path) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${window.location.host}${path}`;
+    }
+
+    function connectWS() {
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+      try {
+        ws = new WebSocket(wsUrl(API.ws));
+      } catch (e) {
+        scheduleWSReconnect();
+        return;
+      }
+
+      ws.addEventListener('open', () => {
+        wsReconnectAttempts = 0;
+      });
+
+      ws.addEventListener('message', (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch (e) {
+          return;
+        }
+        if (msg.type === 'status_update' && msg.service) {
+          applyLiveServiceUpdate(msg.service);
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        scheduleWSReconnect();
+      });
+
+      ws.addEventListener('error', () => {
+        ws.close();
+      });
+    }
+
+    function scheduleWSReconnect() {
+      if (wsReconnectTimer) return;
+      // Exponential backoff capped at 30s, with jitter so many tabs don't
+      // all reconnect in lockstep after a server restart.
+      const base = Math.min(30000, 1000 * Math.pow(2, wsReconnectAttempts));
+      const jitter = Math.random() * 0.3 * base;
+      wsReconnectAttempts++;
+      wsReconnectTimer = setTimeout(() => {
+        wsReconnectTimer = null;
+        connectWS();
+      }, base + jitter);
+    }
+
+    function applyLiveServiceUpdate(service) {
+      if (!state.services) state.services = [];
+      const idx = state.services.findIndex(s => s.service_name === service.service_name);
+      if (idx >= 0) {
+        state.services[idx] = service;
+      } else {
+        state.services.push(service);
+      }
+      updateMetrics();
+      renderServices();
+      if (!isPublic) updateDiagFilterOptions();
+      updateGroupFilterOptions();
+
+      const lastUp = document.getElementById('lastUpdated');
+      if (lastUp) lastUp.innerText = new Date().toLocaleTimeString();
+
+      if (state.activeService === service.service_name) {
+        loadServiceUptime(state.activeService, state.uptimeRange);
+      }
+    }
+
     // Initialization
     document.addEventListener('DOMContentLoaded', () => {
       if (isPublic) document.body.classList.add('is-public');
-      
+
       bindEvents();
       renderSkeletons();
       loadData();
       startPolling();
+      connectWS();
 
       // Pause polling in background tabs to save battery & eliminate stutter
       document.addEventListener('visibilitychange', () => {
@@ -1225,6 +1326,10 @@
         } else {
           loadData();
           startPolling();
+          if (!ws || ws.readyState === WebSocket.CLOSED) {
+            wsReconnectAttempts = 0;
+            connectWS();
+          }
         }
       });
     });
@@ -1330,6 +1435,10 @@
 
       // Refresh
       document.getElementById('btnRefresh').addEventListener('click', () => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          wsReconnectAttempts = 0;
+          connectWS();
+        }
         clearInterval(state.timer);
         loadData();
         state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
@@ -1529,6 +1638,9 @@
 
         const btnTestWebhook = document.getElementById('btnTestWebhook');
         if (btnTestWebhook) btnTestWebhook.addEventListener('click', testWebhookChannel);
+
+        const btnRefreshDeliveries = document.getElementById('btnRefreshDeliveries');
+        if (btnRefreshDeliveries) btnRefreshDeliveries.addEventListener('click', loadWebhookDeliveries);
       }
 
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
@@ -1616,6 +1728,30 @@
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
       setAccentColor(localStorage.getItem('lantern_accent') || null);
       loadWebhookSettings();
+      loadWebhookDeliveries();
+    }
+
+    async function loadWebhookDeliveries() {
+      const box = document.getElementById('webhookDeliveryLog');
+      if (!box) return;
+      try {
+        const res = await fetch(API.webhookDeliveries + '?limit=20');
+        if (!res.ok) throw new Error('Failed to load delivery log');
+        const rows = await res.json();
+        if (!rows || rows.length === 0) {
+          box.innerHTML = '<span style="color:var(--text-muted);">No deliveries yet.</span>';
+          return;
+        }
+        box.innerHTML = rows.map(d => {
+          const icon = d.success ? '<span style="color:var(--up);">✓</span>' : '<span style="color:var(--down);">✕</span>';
+          const time = new Date(d.created_at).toLocaleTimeString();
+          const detail = d.success ? `HTTP ${d.http_status}` : escapeHtml(d.error || 'failed');
+          return `<div style="padding:4px 0; border-bottom:1px solid var(--border);">${icon} <strong>${escapeHtml(d.channel)}</strong> — ${escapeHtml(d.service_name)} <span style="color:var(--text-muted);">(${escapeHtml(d.old_status)}→${escapeHtml(d.new_status)})</span> <span style="color:var(--text-muted);">${time}</span><br/><span style="color:var(--text-secondary);">${detail}</span></div>`;
+        }).join('');
+      } catch (err) {
+        box.innerHTML = '<span style="color:var(--down);">Failed to load delivery log.</span>';
+        console.error('Error loading webhook deliveries:', err);
+      }
     }
 
     function closeSettings() {

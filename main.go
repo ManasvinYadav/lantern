@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"github.com/rs/cors"
 	_ "modernc.org/sqlite"
 )
@@ -101,12 +103,23 @@ func getEnvInt(key string, fallback int) int {
 // initDB opens (or creates) the SQLite database, applies the schema, and
 // performs the first retention-cleanup pass.
 func initDB(cfg *Config) *sql.DB {
-	db, err := sql.Open("sqlite", cfg.DBPath)
+	// _pragma=busy_timeout(5000) is applied by the driver to every pooled
+	// connection as it's opened, so concurrent writers wait up to 5s for the
+	// SQLite write lock instead of failing immediately with SQLITE_BUSY.
+	dsn := cfg.DBPath
+	if strings.Contains(dsn, "?") {
+		dsn += "&_pragma=busy_timeout(5000)"
+	} else {
+		dsn += "?_pragma=busy_timeout(5000)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		log.Fatalf("failed to open database at %s: %v", cfg.DBPath, err)
 	}
 
-	// Ensure WAL mode for better concurrent read performance.
+	// Ensure WAL mode for better concurrent read performance. journal_mode is
+	// persisted in the database file header, so this only needs to run once
+	// regardless of which pooled connection executes it.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		log.Printf("warning: could not enable WAL mode: %v", err)
 	}
@@ -177,6 +190,21 @@ CREATE TABLE IF NOT EXISTS service_groups (
     group_name   TEXT NOT NULL DEFAULT '',
     updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel      TEXT    NOT NULL,
+    service_name TEXT    NOT NULL,
+    old_status   TEXT,
+    new_status   TEXT,
+    success      INTEGER NOT NULL DEFAULT 0,
+    http_status  INTEGER,
+    error        TEXT,
+    created_at   DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created
+    ON webhook_deliveries(created_at DESC);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -333,6 +361,190 @@ type DiagnosticRunDetail struct {
 }
 
 // ---------------------------------------------------------------------------
+// Real-time WebSocket hub
+// ---------------------------------------------------------------------------
+
+// wsClient wraps one connected WebSocket with a buffered outbound queue so a
+// slow reader can never block the broadcaster.
+type wsClient struct {
+	conn *websocket.Conn
+	send chan []byte
+}
+
+// wsHub tracks all connected clients and fans out broadcast messages to them.
+type wsHub struct {
+	mu      sync.RWMutex
+	clients map[*wsClient]bool
+}
+
+func newWSHub() *wsHub {
+	return &wsHub{clients: make(map[*wsClient]bool)}
+}
+
+func (h *wsHub) register(c *wsClient) {
+	h.mu.Lock()
+	h.clients[c] = true
+	h.mu.Unlock()
+}
+
+func (h *wsHub) unregister(c *wsClient) {
+	h.mu.Lock()
+	if _, ok := h.clients[c]; ok {
+		delete(h.clients, c)
+		close(c.send)
+	}
+	h.mu.Unlock()
+}
+
+// broadcast fans msg out to every connected client. Clients whose send
+// buffer is full are skipped rather than blocking the broadcaster — a stuck
+// client should never slow down or stall status ingestion.
+func (h *wsHub) broadcast(msg []byte) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients {
+		select {
+		case c.send <- msg:
+		default:
+			log.Printf("ws: client send buffer full, dropping message")
+		}
+	}
+}
+
+var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	// Permissive by design: Lantern is a homelab tool with no origin
+	// allowlist concept elsewhere (CORS is already AllowedOrigins: []string{"*"}).
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+const (
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = (wsPongWait * 9) / 10
+)
+
+func (c *wsClient) writePump() {
+	ticker := time.NewTicker(wsPingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+	for {
+		select {
+		case msg, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (c *wsClient) readPump(hub *wsHub) {
+	defer func() {
+		hub.unregister(c)
+		c.conn.Close()
+	}()
+	c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+	for {
+		// Clients don't send anything meaningful; we only read to detect
+		// disconnects and process control frames (pong/close).
+		if _, _, err := c.conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}
+
+// handleWS handles GET /ws (and /api/public/ws) by upgrading the connection
+// and registering it with the hub.
+func handleWS(hub *wsHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("ws upgrade error: %v", err)
+			return
+		}
+		client := &wsClient{conn: conn, send: make(chan []byte, 16)}
+		hub.register(client)
+		go client.writePump()
+		go client.readPump(hub)
+	}
+}
+
+// wsMessage is the envelope broadcast to connected dashboards.
+type wsMessage struct {
+	Type    string         `json:"type"`
+	Service ServiceSummary `json:"service"`
+}
+
+// buildServiceSummary assembles the same shape returned by GET /api/services
+// for a single service, for use in WebSocket broadcasts.
+func buildServiceSummary(db *sql.DB, cfg *Config, name string) (ServiceSummary, bool) {
+	var s ServiceSummary
+	var msg sql.NullString
+	err := db.QueryRow(`
+SELECT s.service_name, s.status, s.message, s.timestamp, COALESCE(g.group_name, '')
+FROM status_events s
+LEFT JOIN service_groups g ON s.service_name = g.service_name
+WHERE s.service_name = ?
+ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Timestamp, &s.GroupName)
+	if err != nil {
+		return s, false
+	}
+	if msg.Valid {
+		s.Message = msg.String
+	}
+	s.LastSeen = s.Timestamp
+
+	if t, err := time.Parse(time.RFC3339, s.Timestamp); err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
+		s.Stale = true
+	}
+
+	var maint int
+	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint)
+	s.Maintenance = maint == 1
+
+	up7, up30, buckets := getCachedOrComputeServiceMetrics(db, name)
+	s.Uptime7d = up7
+	s.Uptime30d = up30
+	s.UptimePercent = up30
+	s.History = buckets
+
+	return s, true
+}
+
+// broadcastServiceUpdate builds the current summary for a service and pushes
+// it to all connected WebSocket clients. Intended to be called via `go`
+// from request handlers so it never adds latency to the caller.
+func broadcastServiceUpdate(hub *wsHub, db *sql.DB, cfg *Config, name string) {
+	summary, ok := buildServiceSummary(db, cfg, name)
+	if !ok {
+		return
+	}
+	body, err := json.Marshal(wsMessage{Type: "status_update", Service: summary})
+	if err != nil {
+		log.Printf("ws: failed to marshal broadcast message: %v", err)
+		return
+	}
+	hub.broadcast(body)
+}
+
+// ---------------------------------------------------------------------------
 // Background workers & Webhooks
 // ---------------------------------------------------------------------------
 
@@ -367,36 +579,113 @@ func getEffectiveWebhookURL(db *sql.DB, cfg *Config, channel string) (string, st
 	return "", "none"
 }
 
-func dispatchWebhooks(db *sql.DB, cfg *Config, service, oldStatus, newStatus, message string) {
-	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
+// webhookJob is one outbound delivery attempt queued for a worker.
+type webhookJob struct {
+	channel   string
+	url       string
+	payload   []byte
+	service   string
+	oldStatus string
+	newStatus string
+}
 
-	discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord")
-	if discordURL != "" {
-		payload := map[string]string{"content": text}
-		body, _ := json.Marshal(payload)
-		http.Post(discordURL, "application/json", bytes.NewBuffer(body))
+// webhookDispatcher runs a bounded pool of goroutines that perform outbound
+// webhook HTTP calls, so a slow or unreachable endpoint on one channel can
+// never block status ingestion or the other channels. Every attempt is
+// recorded to webhook_deliveries so failures are visible instead of silently
+// swallowed.
+type webhookDispatcher struct {
+	jobs   chan webhookJob
+	client *http.Client
+	db     *sql.DB
+}
+
+const webhookQueueSize = 256
+
+func newWebhookDispatcher(db *sql.DB, workers int) *webhookDispatcher {
+	d := &webhookDispatcher{
+		jobs:   make(chan webhookJob, webhookQueueSize),
+		client: &http.Client{Timeout: 10 * time.Second},
+		db:     db,
 	}
-	telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram")
-	if telegramURL != "" {
-		payload := map[string]string{"text": text}
-		body, _ := json.Marshal(payload)
-		http.Post(telegramURL, "application/json", bytes.NewBuffer(body))
+	for i := 0; i < workers; i++ {
+		go d.worker()
 	}
-	gotifyURL, _ := getEffectiveWebhookURL(db, cfg, "gotify")
-	if gotifyURL != "" {
-		payload := map[string]string{"title": "Lantern Alert", "message": text}
-		body, _ := json.Marshal(payload)
-		http.Post(gotifyURL, "application/json", bytes.NewBuffer(body))
-	}
-	genericURL, _ := getEffectiveWebhookURL(db, cfg, "generic")
-	if genericURL != "" {
-		payload := map[string]string{"service": service, "old": oldStatus, "new": newStatus, "message": message}
-		body, _ := json.Marshal(payload)
-		http.Post(genericURL, "application/json", bytes.NewBuffer(body))
+	return d
+}
+
+func (d *webhookDispatcher) worker() {
+	for job := range d.jobs {
+		resp, err := d.client.Post(job.url, "application/json", bytes.NewReader(job.payload))
+		success := false
+		httpStatus := 0
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+			log.Printf("webhook dispatch failed: channel=%s service=%s err=%v", job.channel, job.service, err)
+		} else {
+			httpStatus = resp.StatusCode
+			success = resp.StatusCode < 400
+			resp.Body.Close()
+			if !success {
+				errMsg = fmt.Sprintf("http %d", resp.StatusCode)
+				log.Printf("webhook dispatch non-2xx: channel=%s service=%s status=%d", job.channel, job.service, resp.StatusCode)
+			}
+		}
+		d.recordDelivery(job, success, httpStatus, errMsg)
 	}
 }
 
-func runStaleChecker(db *sql.DB, cfg *Config) {
+// enqueue submits a job without blocking the caller. If the queue is full
+// (a sustained outage across many channels), the job is dropped and logged
+// rather than backing up ingestion.
+func (d *webhookDispatcher) enqueue(job webhookJob) {
+	select {
+	case d.jobs <- job:
+	default:
+		log.Printf("webhook queue full, dropping job: channel=%s service=%s", job.channel, job.service)
+		d.recordDelivery(job, false, 0, "delivery queue full, job dropped")
+	}
+}
+
+func (d *webhookDispatcher) recordDelivery(job webhookJob, success bool, httpStatus int, errMsg string) {
+	successInt := 0
+	if success {
+		successInt = 1
+	}
+	_, err := d.db.Exec(
+		`INSERT INTO webhook_deliveries (channel, service_name, old_status, new_status, success, http_status, error, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.channel, job.service, job.oldStatus, job.newStatus, successInt, httpStatus, errMsg, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		log.Printf("failed to record webhook delivery: %v", err)
+	}
+}
+
+// dispatchWebhooks enqueues one delivery job per configured channel. It
+// returns immediately — actual HTTP calls happen on worker goroutines.
+func dispatchWebhooks(dispatcher *webhookDispatcher, db *sql.DB, cfg *Config, service, oldStatus, newStatus, message string) {
+	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
+
+	if discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord"); discordURL != "" {
+		body, _ := json.Marshal(map[string]string{"content": text})
+		dispatcher.enqueue(webhookJob{channel: "discord", url: discordURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
+	}
+	if telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram"); telegramURL != "" {
+		body, _ := json.Marshal(map[string]string{"text": text})
+		dispatcher.enqueue(webhookJob{channel: "telegram", url: telegramURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
+	}
+	if gotifyURL, _ := getEffectiveWebhookURL(db, cfg, "gotify"); gotifyURL != "" {
+		body, _ := json.Marshal(map[string]string{"title": "Lantern Alert", "message": text})
+		dispatcher.enqueue(webhookJob{channel: "gotify", url: gotifyURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
+	}
+	if genericURL, _ := getEffectiveWebhookURL(db, cfg, "generic"); genericURL != "" {
+		body, _ := json.Marshal(map[string]string{"service": service, "old": oldStatus, "new": newStatus, "message": message})
+		dispatcher.enqueue(webhookJob{channel: "generic", url: genericURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
+	}
+}
+
+func runStaleChecker(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -419,7 +708,9 @@ WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
 			t, err := time.Parse(time.RFC3339, ts)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
 				db.Exec(`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, 'down', 'Service missed heartbeat timeout', ?)`, name, time.Now().UTC().Format(time.RFC3339))
-				go dispatchWebhooks(db, cfg, name, status, "down", "Service missed heartbeat timeout")
+				invalidateServiceMetricsCache(name)
+				dispatchWebhooks(dispatcher, db, cfg, name, status, "down", "Service missed heartbeat timeout")
+				go broadcastServiceUpdate(hub, db, cfg, name)
 			}
 		}
 		rows.Close()
@@ -461,7 +752,7 @@ func parseTimestamp(ts string) time.Time {
 // ---------------------------------------------------------------------------
 
 // handlePostStatus handles POST /api/status.
-func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
+func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StatusEventRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -513,10 +804,11 @@ func handlePostStatus(db *sql.DB, cfg *Config) http.HandlerFunc {
 		var maint int
 		db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", req.ServiceName).Scan(&maint)
 		if maint == 0 && lastStatus != "" && lastStatus != req.Status {
-			go dispatchWebhooks(db, cfg, req.ServiceName, lastStatus, req.Status, req.Message)
+			dispatchWebhooks(dispatcher, db, cfg, req.ServiceName, lastStatus, req.Status, req.Message)
 		}
 
 		invalidateServiceMetricsCache(req.ServiceName)
+		go broadcastServiceUpdate(hub, db, cfg, req.ServiceName)
 
 		writeJSON(w, http.StatusCreated, map[string]int64{"id": id})
 	}
@@ -963,6 +1255,58 @@ func handleTestWebhook(db *sql.DB, cfg *Config) http.HandlerFunc {
 	}
 }
 
+// WebhookDelivery is one row returned by GET /api/webhooks/deliveries.
+type WebhookDelivery struct {
+	ID          int64  `json:"id"`
+	Channel     string `json:"channel"`
+	ServiceName string `json:"service_name"`
+	OldStatus   string `json:"old_status"`
+	NewStatus   string `json:"new_status"`
+	Success     bool   `json:"success"`
+	HTTPStatus  int    `json:"http_status"`
+	Error       string `json:"error"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// handleGetWebhookDeliveries handles GET /api/webhooks/deliveries.
+// Surfaces recent delivery attempts (success and failure) so a slow or
+// unreachable endpoint is visible instead of silently swallowed.
+func handleGetWebhookDeliveries(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := 20
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+				limit = n
+			}
+		}
+
+		rows, err := db.Query(`
+SELECT id, channel, service_name, COALESCE(old_status,''), COALESCE(new_status,''), success, COALESCE(http_status,0), COALESCE(error,''), created_at
+FROM webhook_deliveries
+ORDER BY id DESC
+LIMIT ?`, limit)
+		if err != nil {
+			log.Printf("handleGetWebhookDeliveries db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer rows.Close()
+
+		deliveries := []WebhookDelivery{}
+		for rows.Next() {
+			var d WebhookDelivery
+			var success int
+			if err := rows.Scan(&d.ID, &d.Channel, &d.ServiceName, &d.OldStatus, &d.NewStatus, &success, &d.HTTPStatus, &d.Error, &d.CreatedAt); err != nil {
+				continue
+			}
+			d.Success = success == 1
+			deliveries = append(deliveries, d)
+		}
+
+		writeJSON(w, http.StatusOK, deliveries)
+	}
+}
+
 // GroupSummary represents a service group and the number of services in it.
 type GroupSummary struct {
 	Name  string `json:"name"`
@@ -1047,8 +1391,13 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
+func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.Handler {
 	r := mux.NewRouter()
+
+	// --- WebSocket routes (registered outside jsonMiddleware; the upgrade
+	// handshake writes its own headers via Hijack) ---
+	r.Handle("/ws", handleWS(hub)).Methods(http.MethodGet)
+	r.Handle("/api/public/ws", handleWS(hub)).Methods(http.MethodGet)
 
 	// --- API routes ---
 	api := r.PathPrefix("/api").Subrouter()
@@ -1058,9 +1407,10 @@ func setupRoutes(db *sql.DB, cfg *Config) http.Handler {
 	api.Handle("/webhooks", handleGetWebhooks(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/webhooks", handlePutWebhooks(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
+	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 
-	api.Handle("/status", handlePostStatus(db, cfg)).Methods(http.MethodPost)
+	api.Handle("/status", handlePostStatus(db, cfg, dispatcher, hub)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/group", handlePutServiceGroup(db)).Methods(http.MethodPut, http.MethodPost)
@@ -1134,6 +1484,13 @@ func (w *gzipResponseWriter) WriteHeader(code int) {
 
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// WebSocket upgrades hijack the underlying connection directly;
+		// our gzipResponseWriter doesn't implement http.Hijacker, so it
+		// must never wrap a /ws request.
+		if r.URL.Path == "/ws" || r.URL.Path == "/api/public/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
 			return
@@ -1152,18 +1509,23 @@ func gzipMiddleware(next http.Handler) http.Handler {
 // Entry point
 // ---------------------------------------------------------------------------
 
+const webhookWorkerCount = 4
+
 func main() {
 	cfg := loadConfig()
 	db := initDB(cfg)
 	defer db.Close()
 
+	hub := newWSHub()
+	dispatcher := newWebhookDispatcher(db, webhookWorkerCount)
+
 	// Run retention cleanup in the background every hour.
 	go runRetentionCleanup(db, cfg)
 
 	// Background worker for missing heartbeats
-	go runStaleChecker(db, cfg)
+	go runStaleChecker(db, cfg, dispatcher, hub)
 
-	router := setupRoutes(db, cfg)
+	router := setupRoutes(db, cfg, dispatcher, hub)
 
 	log.Printf("Lantern v%s listening on :%s (auth=%v, db=%s, retention=%dd)",
 		version, cfg.Port, cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
