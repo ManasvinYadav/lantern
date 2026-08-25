@@ -145,6 +145,47 @@
       --radius-lg: 16px;
       --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+
+      /* Spacing scale (4px base unit) */
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --space-10: 40px;
+
+      /* Type scale — matches sizes already in use across the app, now named */
+      --text-xs: 11px;
+      --text-sm: 12px;
+      --text-base: 13px;
+      --text-md: 14px;
+      --text-lg: 16px;
+      --text-xl: 18px;
+      --text-2xl: 24px;
+      --text-3xl: 32px;
+
+      /* Elevation scale — neutral shadows, independent of accent color */
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.15);
+      --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.2);
+      --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.35);
+      --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.45);
+
+      /* Motion */
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --duration-fast: 150ms;
+      --duration-base: 250ms;
+      --duration-slow: 400ms;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -343,13 +384,25 @@
       position: relative;
     }
     
-    .service-card:hover { transform: translateY(-2px) translateZ(0); border-color: var(--border-focus); box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
-    
-    .service-card.up { border-top: 2px solid var(--up); }
-    .service-card.down { border-top: 2px solid var(--down); }
-    .service-card.degraded { border-top: 2px solid var(--degraded); }
-    .service-card.maintenance { border-top: 2px solid var(--maint); }
-    .service-card.unknown { border-top: 2px solid var(--unknown); }
+    .service-card:hover { transform: translateY(-2px) translateZ(0); border-color: var(--border-focus); box-shadow: var(--shadow-md); }
+
+    .service-card.up { border-top: 2px solid var(--up); --live-glow: var(--up-glow); }
+    .service-card.down { border-top: 2px solid var(--down); --live-glow: var(--down-glow); }
+    .service-card.degraded { border-top: 2px solid var(--degraded); --live-glow: var(--degraded-glow); }
+    .service-card.maintenance { border-top: 2px solid var(--maint); --live-glow: var(--maint-glow); }
+    .service-card.unknown { border-top: 2px solid var(--unknown); --live-glow: var(--unknown-glow); }
+
+    /* Live-update pulse: a service card briefly glows in its own status color
+       when a WebSocket push updates it, so the dashboard visibly "comes
+       alive" instead of changing silently. */
+    @keyframes live-update-flash {
+      0%   { box-shadow: 0 0 0 0 var(--live-glow, var(--accent-glow)); }
+      35%  { box-shadow: 0 0 0 7px var(--live-glow, var(--accent-glow)); }
+      100% { box-shadow: 0 0 0 0 transparent; }
+    }
+    .service-card.just-updated {
+      animation: live-update-flash 1.1s var(--ease-out);
+    }
 
     .service-header { display: flex; justify-content: space-between; align-items: flex-start; }
     .service-name-group { display: flex; align-items: center; gap: 12px; }
@@ -384,6 +437,7 @@
     .service-status-text {
       font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
       padding: 2px 8px; border-radius: 4px;
+      transition: background-color var(--duration-base) ease, color var(--duration-base) ease;
     }
     .service-card.up .service-status-text { background: var(--up-bg); color: var(--up); }
     .service-card.down .service-status-text { background: var(--down-bg); color: var(--down); }
@@ -393,9 +447,11 @@
 
     .service-message { font-size: 13px; color: var(--text-secondary); min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    .trend-container { display: flex; flex-direction: column; gap: 6px; }
+    /* Secondary information: kept legible but visually quieter than the
+       primary status/name/last-seen row above it. */
+    .trend-container { display: flex; flex-direction: column; gap: 6px; opacity: 0.92; }
     .trend-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
-    .trend-bar { display: flex; gap: 2px; height: 28px; align-items: flex-end; }
+    .trend-bar { display: flex; gap: 2px; height: 22px; align-items: flex-end; }
     .trend-block {
       flex: 1; min-width: 0; background: var(--panel-hover); border-radius: 2px;
       transition: height 0.25s ease, background 0.25s ease; height: 100%;
@@ -813,6 +869,56 @@
       color: var(--text-primary);
       word-break: break-all;
     }
+
+    /* =====================================================================
+       Connection status banner — visible, non-silent error state for a
+       failed WebSocket connection or API load (never shown for a healthy
+       connection; the retry button forces both a data refresh and a
+       WebSocket reconnect attempt).
+       ===================================================================== */
+    .connection-banner {
+      display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+      background: var(--down-bg); border: 1px solid var(--down); color: var(--down);
+      padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm);
+      margin-bottom: var(--space-5);
+      font-size: var(--text-base); font-weight: 500;
+      animation: banner-in var(--duration-base) var(--ease-out);
+    }
+    .connection-banner.hidden { display: none; }
+    .connection-banner .btn { border-color: var(--down); color: var(--down); }
+    .connection-banner .btn:hover { background: var(--down-bg); }
+    @keyframes banner-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* =====================================================================
+       Responsive — mobile
+       ===================================================================== */
+    @media (max-width: 640px) {
+      .app-container { padding: 0 var(--space-4) var(--space-8); }
+      .header { padding: var(--space-5) 0; gap: var(--space-3); }
+      .header-left { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+      .header-right { width: 100%; justify-content: space-between; }
+      .header-title { font-size: var(--text-xl); }
+
+      .metrics-grid { grid-template-columns: 1fr; gap: var(--space-3); }
+      .metric-card { padding: var(--space-4); }
+      .metric-value { font-size: var(--text-2xl); }
+
+      .section-toolbar { flex-direction: column; align-items: stretch; }
+      .section-toolbar > div { width: 100%; }
+      .search-box-wrap { width: 100%; min-width: 0; }
+      .filters { width: 100%; }
+      .group-filter-wrap select { width: 100%; }
+
+      .services-grid { grid-template-columns: 1fr; }
+
+      .drawer { width: 100vw; }
+      .drawer-header, .drawer-body { padding: var(--space-4); }
+
+      .connection-banner { flex-direction: column; align-items: stretch; text-align: center; }
+    }
   </style>
 
   <script>
@@ -858,6 +964,11 @@
         </button>
       </div>
     </header>
+
+    <div id="connectionBanner" class="connection-banner hidden" role="status" aria-live="polite">
+      <span id="connectionBannerText">Reconnecting…</span>
+      <button type="button" class="btn" id="btnBannerRetry" style="font-size:11px; padding:3px 10px;">Retry now</button>
+    </div>
 
     <div class="metrics-grid">
       <div class="metric-card">
@@ -1276,6 +1387,33 @@
     let wsReconnectAttempts = 0;
     let wsReconnectTimer = null;
 
+    // --- Connection status banner ---------------------------------------
+    // A visible, non-silent indicator for a dropped WebSocket or a failed
+    // API call. wsDownSince is used to add a short grace period before
+    // showing the banner, so a routine reconnect blip (a server restart,
+    // a laptop waking from sleep) doesn't flash an alarming message.
+    let wsDownSince = null;
+    let apiHealthy = true;
+    const WS_BANNER_GRACE_MS = 3000;
+
+    function updateConnectionBanner() {
+      const banner = document.getElementById('connectionBanner');
+      const text = document.getElementById('connectionBannerText');
+      if (!banner || !text) return;
+
+      const wsDownPastGrace = wsDownSince !== null && (Date.now() - wsDownSince) > WS_BANNER_GRACE_MS;
+
+      if (wsDownPastGrace) {
+        text.innerText = 'Live updates disconnected — reconnecting…';
+        banner.classList.remove('hidden');
+      } else if (!apiHealthy) {
+        text.innerText = "Couldn't refresh service data — retrying…";
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    }
+
     function wsUrl(path) {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       return `${proto}//${window.location.host}${path}`;
@@ -1295,6 +1433,8 @@
 
       ws.addEventListener('open', () => {
         wsReconnectAttempts = 0;
+        wsDownSince = null;
+        updateConnectionBanner();
       });
 
       ws.addEventListener('message', (event) => {
@@ -1310,6 +1450,8 @@
       });
 
       ws.addEventListener('close', () => {
+        if (wsDownSince === null) wsDownSince = Date.now();
+        setTimeout(updateConnectionBanner, WS_BANNER_GRACE_MS + 50);
         scheduleWSReconnect();
       });
 
@@ -1346,6 +1488,18 @@
 
       const lastUp = document.getElementById('lastUpdated');
       if (lastUp) lastUp.innerText = new Date().toLocaleTimeString();
+
+      // Signature live moment: the card that just changed briefly glows in
+      // its own status color, so a push arriving via WebSocket is visibly
+      // distinct from a routine poll.
+      const grid = document.getElementById('servicesGrid');
+      const card = grid && grid.querySelector(`[data-service="${CSS.escape(service.service_name)}"]`);
+      if (card) {
+        card.classList.remove('just-updated');
+        void card.offsetWidth; // restart the animation if it's already running
+        card.classList.add('just-updated');
+        setTimeout(() => card.classList.remove('just-updated'), 1200);
+      }
 
       if (state.activeService === service.service_name) {
         loadServiceUptime(state.activeService, state.uptimeRange);
@@ -1487,6 +1641,17 @@
         state.timer = setInterval(loadData, REFRESH_INTERVAL_MS);
         showToast('Services refreshed', 'info');
       });
+
+      const btnBannerRetry = document.getElementById('btnBannerRetry');
+      if (btnBannerRetry) {
+        btnBannerRetry.addEventListener('click', () => {
+          loadData();
+          if (!ws || ws.readyState === WebSocket.CLOSED) {
+            wsReconnectAttempts = 0;
+            connectWS();
+          }
+        });
+      }
 
       // Drawers Close
       document.getElementById('sdClose').addEventListener('click', () => closeDrawer('serviceDrawerOverlay'));
@@ -2005,12 +2170,11 @@
           fetch(API.groups).catch(() => null)
         ]);
 
-        if (svcRes.ok) {
-          state.services = await svcRes.json();
-          updateMetrics();
-          renderServices();
-          if (!isPublic) updateDiagFilterOptions();
-        }
+        if (!svcRes.ok) throw new Error(`GET ${API.services} returned ${svcRes.status}`);
+        state.services = await svcRes.json();
+        updateMetrics();
+        renderServices();
+        if (!isPublic) updateDiagFilterOptions();
 
         if (grpRes && grpRes.ok) {
           state.groups = await grpRes.json();
@@ -2018,8 +2182,13 @@
         } else {
           updateGroupFilterOptions();
         }
+
+        apiHealthy = true;
+        updateConnectionBanner();
       } catch(e) {
         console.error('Failed to load data', e);
+        apiHealthy = false;
+        updateConnectionBanner();
       } finally {
         if (pulse) pulse.classList.add('loading');
         const lastUp = document.getElementById('lastUpdated');
@@ -2118,7 +2287,7 @@
         <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
         ${trendHTML}
         <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-           <span class="service-relative-ts" style="font-size:11px; color:var(--text-muted)">${relativeTime(s.timestamp)}</span>
+           <span class="service-relative-ts" style="font-size:12px; font-weight:500; color:var(--text-secondary)">${relativeTime(s.timestamp)}</span>
            <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
         </div>
       `;
