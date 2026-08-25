@@ -1978,11 +1978,19 @@
           const info = monitorBadgeInfo(m.monitor_type) || { icon: '?', label: m.monitor_type };
           const lastChecked = m.last_checked_at ? new Date(m.last_checked_at).toLocaleTimeString() : 'never';
           const stateLabel = m.enabled ? '' : ' <span style="color:var(--text-muted);">(disabled)</span>';
+          let certLine = '';
+          if (m.cert_expiry_at) {
+            const certColor = m.cert_warning ? 'var(--down)' : 'var(--text-muted)';
+            const certIcon = m.cert_warning ? '⚠️ ' : '';
+            const expiryDate = new Date(m.cert_expiry_at).toLocaleDateString();
+            certLine = `<div style="color:${certColor}; font-size:11px; margin-top:2px;">${certIcon}TLS cert expires ${expiryDate} (${m.cert_days_remaining}d)</div>`;
+          }
           return `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:rgba(0,0,0,0.15); border:1px solid var(--border); border-radius:var(--radius-sm);">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:rgba(0,0,0,0.15); border:1px solid ${m.cert_warning ? 'var(--down)' : 'var(--border)'}; border-radius:var(--radius-sm);">
               <div>
                 <strong>${escapeHtml(m.service_name)}</strong>${stateLabel}
                 <div style="color:var(--text-muted); font-size:11px;">${info.icon} ${info.label} → ${escapeHtml(m.target)} · every ${m.interval_seconds}s · last checked ${lastChecked}</div>
+                ${certLine}
               </div>
               <button type="button" class="btn" style="font-size:11px; padding:4px 10px;" onclick="deleteActiveMonitor('${escapeHtml(m.service_name).replace(/'/g, "\\'")}')">Remove</button>
             </div>`;

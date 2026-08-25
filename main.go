@@ -225,6 +225,9 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 	// Schema migration for webhook_configs updated_at column
 	_, _ = db.Exec("ALTER TABLE webhook_configs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
 
+	// Schema migration for active_monitors cert_expiry_at column (SSL expiry tracking)
+	_, _ = db.Exec("ALTER TABLE active_monitors ADD COLUMN cert_expiry_at DATETIME;")
+
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
 

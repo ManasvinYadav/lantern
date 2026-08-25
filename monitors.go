@@ -30,6 +30,7 @@ const (
 	maxMonitorIntervalSeconds = 3600
 	monitorCheckTimeout       = 10 * time.Second
 	monitorQueueSize          = 256
+	certExpiryWarningDays     = 14
 )
 
 // ActiveMonitor is the persisted configuration for one service's active check.
@@ -40,6 +41,11 @@ type ActiveMonitor struct {
 	IntervalSeconds int     `json:"interval_seconds"`
 	Enabled         bool    `json:"enabled"`
 	LastCheckedAt   *string `json:"last_checked_at"`
+	// CertExpiryAt is set for "http" monitors whose target is HTTPS; nil
+	// otherwise (plain HTTP, TCP, ping, or before the first check completes).
+	CertExpiryAt      *string `json:"cert_expiry_at"`
+	CertDaysRemaining *int    `json:"cert_days_remaining"`
+	CertWarning       bool    `json:"cert_warning"`
 }
 
 // ---------------------------------------------------------------------------
@@ -86,43 +92,69 @@ func (p *monitorPool) enqueue(job monitorCheckJob) {
 
 func (p *monitorPool) worker() {
 	for job := range p.jobs {
-		status, message := p.runCheck(job)
+		status, message, certExpiry := p.runCheck(job)
+
+		if certExpiry != nil {
+			daysLeft := int(time.Until(*certExpiry).Hours() / 24)
+			if daysLeft <= certExpiryWarningDays {
+				message = fmt.Sprintf("%s — ⚠️ TLS cert expires in %d day(s) (%s)", message, daysLeft, certExpiry.Format("2006-01-02"))
+			}
+		}
+
 		ingestStatusEvent(p.db, p.cfg, p.dispatcher, p.hub, job.serviceName, status, message, time.Now().UTC())
-		_, err := p.db.Exec(`UPDATE active_monitors SET last_checked_at = ? WHERE service_name = ?`,
-			time.Now().UTC().Format(time.RFC3339), job.serviceName)
-		if err != nil {
-			log.Printf("failed to update last_checked_at for %s: %v", job.serviceName, err)
+
+		if certExpiry != nil {
+			_, err := p.db.Exec(`UPDATE active_monitors SET last_checked_at = ?, cert_expiry_at = ? WHERE service_name = ?`,
+				time.Now().UTC().Format(time.RFC3339), certExpiry.UTC().Format(time.RFC3339), job.serviceName)
+			if err != nil {
+				log.Printf("failed to update last_checked_at/cert_expiry_at for %s: %v", job.serviceName, err)
+			}
+		} else {
+			_, err := p.db.Exec(`UPDATE active_monitors SET last_checked_at = ? WHERE service_name = ?`,
+				time.Now().UTC().Format(time.RFC3339), job.serviceName)
+			if err != nil {
+				log.Printf("failed to update last_checked_at for %s: %v", job.serviceName, err)
+			}
 		}
 	}
 }
 
-func (p *monitorPool) runCheck(job monitorCheckJob) (status, message string) {
+func (p *monitorPool) runCheck(job monitorCheckJob) (status, message string, certExpiry *time.Time) {
 	switch job.monitorType {
 	case "http":
 		return checkHTTP(p.httpClient, job.target)
 	case "tcp":
-		return checkTCP(job.target)
+		s, m := checkTCP(job.target)
+		return s, m, nil
 	case "ping":
-		return checkPing(job.target)
+		s, m := checkPing(job.target)
+		return s, m, nil
 	default:
-		return "unknown", fmt.Sprintf("unrecognized monitor type: %s", job.monitorType)
+		return "unknown", fmt.Sprintf("unrecognized monitor type: %s", job.monitorType), nil
 	}
 }
 
 // checkHTTP performs a GET request; 2xx/3xx is up, anything else (including
-// transport errors and timeouts) is down.
-func checkHTTP(client *http.Client, target string) (string, string) {
+// transport errors and timeouts) is down. For HTTPS targets, also returns
+// the leaf certificate's expiry so callers can warn ahead of renewal.
+func checkHTTP(client *http.Client, target string) (status, message string, certExpiry *time.Time) {
 	start := time.Now()
 	resp, err := client.Get(target)
 	if err != nil {
-		return "down", err.Error()
+		return "down", err.Error(), nil
 	}
 	defer resp.Body.Close()
 	rtt := time.Since(start)
-	if resp.StatusCode < 400 {
-		return "up", fmt.Sprintf("HTTP %d in %s", resp.StatusCode, rtt.Round(time.Millisecond))
+
+	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
+		notAfter := resp.TLS.PeerCertificates[0].NotAfter
+		certExpiry = &notAfter
 	}
-	return "down", fmt.Sprintf("HTTP %d", resp.StatusCode)
+
+	if resp.StatusCode < 400 {
+		return "up", fmt.Sprintf("HTTP %d in %s", resp.StatusCode, rtt.Round(time.Millisecond)), certExpiry
+	}
+	return "down", fmt.Sprintf("HTTP %d", resp.StatusCode), certExpiry
 }
 
 // checkTCP attempts a TCP connection to target ("host:port"); success is up.
@@ -295,10 +327,26 @@ func validateMonitorTarget(monitorType, target string) error {
 	return nil
 }
 
+// applyCertFields fills CertDaysRemaining/CertWarning from a nullable
+// cert_expiry_at column value already scanned into m.CertExpiryAt.
+func applyCertFields(m *ActiveMonitor, certExpiry sql.NullString) {
+	if !certExpiry.Valid {
+		return
+	}
+	m.CertExpiryAt = &certExpiry.String
+	t, err := time.Parse(time.RFC3339, certExpiry.String)
+	if err != nil {
+		return
+	}
+	days := int(time.Until(t).Hours() / 24)
+	m.CertDaysRemaining = &days
+	m.CertWarning = days <= certExpiryWarningDays
+}
+
 // handleGetMonitors handles GET /api/monitors — lists every configured active monitor.
 func handleGetMonitors(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.Query(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at FROM active_monitors ORDER BY service_name ASC`)
+		rows, err := db.Query(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at FROM active_monitors ORDER BY service_name ASC`)
 		if err != nil {
 			log.Printf("handleGetMonitors db error: %v", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -310,14 +358,15 @@ func handleGetMonitors(db *sql.DB) http.HandlerFunc {
 		for rows.Next() {
 			var m ActiveMonitor
 			var enabled int
-			var lastChecked sql.NullString
-			if err := rows.Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked); err != nil {
+			var lastChecked, certExpiry sql.NullString
+			if err := rows.Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry); err != nil {
 				continue
 			}
 			m.Enabled = enabled == 1
 			if lastChecked.Valid {
 				m.LastCheckedAt = &lastChecked.String
 			}
+			applyCertFields(&m, certExpiry)
 			monitors = append(monitors, m)
 		}
 		writeJSON(w, http.StatusOK, monitors)
@@ -330,9 +379,9 @@ func handleGetServiceMonitor(db *sql.DB) http.HandlerFunc {
 		name := mux.Vars(r)["name"]
 		var m ActiveMonitor
 		var enabled int
-		var lastChecked sql.NullString
-		err := db.QueryRow(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at FROM active_monitors WHERE service_name = ?`, name).
-			Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked)
+		var lastChecked, certExpiry sql.NullString
+		err := db.QueryRow(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at FROM active_monitors WHERE service_name = ?`, name).
+			Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry)
 		if err == sql.ErrNoRows {
 			writeError(w, http.StatusNotFound, "no active monitor configured for this service")
 			return
@@ -346,6 +395,7 @@ func handleGetServiceMonitor(db *sql.DB) http.HandlerFunc {
 		if lastChecked.Valid {
 			m.LastCheckedAt = &lastChecked.String
 		}
+		applyCertFields(&m, certExpiry)
 		writeJSON(w, http.StatusOK, m)
 	}
 }
