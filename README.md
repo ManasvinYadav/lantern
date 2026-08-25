@@ -69,6 +69,7 @@ Lantern is highly configurable. Dive into the detailed guides below:
 - 📖 **[API Reference](docs/API.md)**: Full list of endpoints, payloads, and examples.
 - ⚙️ **[Configuration Guide](docs/CONFIG.md)**: Detailed breakdown of all environment variables, auth, and database settings.
 - 🔔 **[Webhooks & Notifications](docs/WEBHOOKS.md)**: Setup guides for Discord, Telegram, Gotify, and generic integrations.
+- 💾 **[Backup & Restore](docs/BACKUP.md)**: How to download a consistent database snapshot and restore it.
 
 ## Quick API Example
 

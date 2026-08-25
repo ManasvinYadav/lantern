@@ -1028,6 +1028,46 @@ func handleExportServiceHistory(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// handleBackup handles GET /api/backup. Uses SQLite's VACUUM INTO to produce
+// a single consistent snapshot file (safe to read even while the live DB is
+// under WAL-mode concurrent writes), streams it to the client, then removes
+// the temporary file.
+func handleBackup(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tmpPath := fmt.Sprintf("%s/lantern-backup-%d.db", os.TempDir(), time.Now().UnixNano())
+		defer os.Remove(tmpPath)
+
+		if _, err := db.Exec(fmt.Sprintf("VACUUM INTO '%s'", tmpPath)); err != nil {
+			log.Printf("handleBackup VACUUM INTO error: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to snapshot database")
+			return
+		}
+
+		f, err := os.Open(tmpPath)
+		if err != nil {
+			log.Printf("handleBackup open snapshot error: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to read database snapshot")
+			return
+		}
+		defer f.Close()
+
+		info, err := f.Stat()
+		if err != nil {
+			log.Printf("handleBackup stat error: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to read database snapshot")
+			return
+		}
+
+		filename := fmt.Sprintf("lantern-backup-%s.db", time.Now().UTC().Format("20060102-150405"))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		if _, err := io.Copy(w, f); err != nil {
+			log.Printf("handleBackup stream error: %v", err)
+		}
+	}
+}
+
 // handlePostDiagnostics handles POST /api/diagnostics.
 func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1568,6 +1608,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
 	api.Handle("/activity", handleGetActivity(db)).Methods(http.MethodGet)
+	api.Handle("/backup", handleBackup(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 
 	api.Handle("/monitors", handleGetMonitors(db)).Methods(http.MethodGet)

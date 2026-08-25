@@ -1278,6 +1278,17 @@
             <span style="color:var(--text-muted);">No active monitors configured.</span>
           </div>
         </div>
+
+        <!-- Backup Section -->
+        <div style="padding-top:16px; border-top:1px solid var(--border);">
+          <div class="section-label">Backup</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            Download a consistent snapshot of the full database (all services, history, settings, and webhook configs). See the README for how to restore it.
+          </div>
+          <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+            <button type="button" class="btn primary" id="btnBackupDb">Download Backup</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1892,6 +1903,14 @@
 
         const btnSaveMonitor = document.getElementById('btnSaveMonitor');
         if (btnSaveMonitor) btnSaveMonitor.addEventListener('click', saveActiveMonitor);
+
+        const btnBackupDb = document.getElementById('btnBackupDb');
+        if (btnBackupDb) {
+          btnBackupDb.addEventListener('click', () => {
+            window.open(API.backup, '_blank');
+            showToast('Preparing database backup…', 'info');
+          });
+        }
       }
 
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
