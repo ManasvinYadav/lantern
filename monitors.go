@@ -92,7 +92,11 @@ func (p *monitorPool) enqueue(job monitorCheckJob) {
 
 func (p *monitorPool) worker() {
 	for job := range p.jobs {
+		// Time the probe itself. Measured around runCheck only, so the recorded
+		// latency is the network check and excludes the DB writes below.
+		start := time.Now()
 		status, message, certExpiry := p.runCheck(job)
+		latencyMs := time.Since(start).Milliseconds()
 
 		if certExpiry != nil {
 			daysLeft := int(time.Until(*certExpiry).Hours() / 24)
@@ -101,7 +105,7 @@ func (p *monitorPool) worker() {
 			}
 		}
 
-		ingestStatusEvent(p.db, p.cfg, p.dispatcher, p.hub, job.serviceName, status, message, time.Now().UTC())
+		ingestStatusEvent(p.db, p.cfg, p.dispatcher, p.hub, job.serviceName, status, message, time.Now().UTC(), latencyMs)
 
 		if certExpiry != nil {
 			_, err := p.db.Exec(`UPDATE active_monitors SET last_checked_at = ?, cert_expiry_at = ? WHERE service_name = ?`,

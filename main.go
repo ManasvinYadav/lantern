@@ -398,6 +398,9 @@ type StatusEventRequest struct {
 	// doesn't need a separate PUT /maintenance request. Omitted (nil)
 	// leaves the current maintenance state untouched.
 	Maintenance *bool `json:"maintenance,omitempty"`
+	// LatencyMs is how long the reporter's own check took, in milliseconds.
+	// Optional: omitted (nil) or negative values are recorded as 0.
+	LatencyMs *int64 `json:"latency_ms,omitempty"`
 }
 
 // ServiceSummary is a single item returned by GET /api/services.
@@ -916,7 +919,7 @@ WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
 			}
 			t, err := time.Parse(time.RFC3339, ts)
 			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
-				ingestStatusEvent(db, cfg, dispatcher, hub, name, "down", "Service missed heartbeat timeout", time.Now().UTC())
+				ingestStatusEvent(db, cfg, dispatcher, hub, name, "down", "Service missed heartbeat timeout", time.Now().UTC(), 0)
 			}
 		}
 		rows.Close()
@@ -1000,7 +1003,13 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 			setMaintenanceState(db, req.ServiceName, *req.Maintenance, "")
 		}
 
-		id, err := ingestStatusEvent(db, cfg, dispatcher, hub, req.ServiceName, req.Status, req.Message, ts)
+		// A reporter may omit latency entirely; treat nil and negative as 0 so a
+		// bad client can never write a nonsense duration into the beat.
+		var latencyMs int64
+		if req.LatencyMs != nil && *req.LatencyMs > 0 {
+			latencyMs = *req.LatencyMs
+		}
+		id, err := ingestStatusEvent(db, cfg, dispatcher, hub, req.ServiceName, req.Status, req.Message, ts, latencyMs)
 		if err != nil {
 			log.Printf("handlePostStatus db error: %v", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -1015,13 +1024,13 @@ func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hu
 // whether it arrives via POST /api/status (push) or an active monitor check
 // (Phase 2). Both sources land in the same status_events table, so uptime %,
 // incidents, and the history graph work identically regardless of origin.
-func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, serviceName, status, message string, ts time.Time) (int64, error) {
+func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub, serviceName, status, message string, ts time.Time, latencyMs int64) (int64, error) {
 	var lastStatus string
 	db.QueryRow("SELECT status FROM status_events WHERE service_name = ? ORDER BY id DESC LIMIT 1", serviceName).Scan(&lastStatus)
 
 	result, err := db.Exec(
-		`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, ?, ?, ?)`,
-		serviceName, status, message, ts.Format(time.RFC3339),
+		`INSERT INTO status_events (service_name, status, message, timestamp, latency_ms) VALUES (?, ?, ?, ?, ?)`,
+		serviceName, status, message, ts.Format(time.RFC3339), latencyMs,
 	)
 	if err != nil {
 		return 0, err
