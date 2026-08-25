@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -464,6 +465,33 @@ func statusPriority(s string) int {
 // GET /api/services/{name}/incidents — REAL incident detection
 // ---------------------------------------------------------------------------
 
+// countRecentIncidents counts distinct down/degraded incidents since a given
+// time, without the duration/maintenance detail handleGetIncidents computes
+// — used by the Prometheus exporter, which needs one count per service per
+// scrape rather than a full incident list.
+func countRecentIncidents(db *sql.DB, name string, since time.Time) int {
+	events, err := fetchEvents(db, name, since)
+	if err != nil {
+		return 0
+	}
+	prior := fetchLastEventBefore(db, name, since)
+	timeline := buildTimeline(prior, events, since)
+
+	count := 0
+	inIncident := false
+	for _, seg := range timeline {
+		if isDown(seg.status) {
+			if !inIncident {
+				count++
+				inIncident = true
+			}
+		} else {
+			inIncident = false
+		}
+	}
+	return count
+}
+
 func handleGetIncidents(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -633,11 +661,140 @@ func handleGetMaintenance(db *sql.DB) http.HandlerFunc {
 // GET /api/docs
 // ---------------------------------------------------------------------------
 
+// apiDocRoute describes one route for the /api/docs reference page.
+type apiDocRoute struct {
+	Method, Path, Desc, Example string
+}
+
+// apiDocSection groups routes under a heading, in the order they should
+// appear on the page.
+type apiDocSection struct {
+	Title  string
+	Routes []apiDocRoute
+}
+
+// apiDocSections is hand-maintained from the actual route table in
+// setupRoutes — kept accurate by being edited alongside real route changes,
+// not generated from a separate spec that can drift.
+var apiDocSections = []apiDocSection{
+	{"Authentication", []apiDocRoute{
+		{"—", "—", "Bearer token: Authorization: Bearer <LANTERN_AUTH_TOKEN> (admin) or a per-service token from api_tokens (scoped). Basic Auth: LANTERN_AUTH_USER/LANTERN_AUTH_PASS. Required only on mutating/admin routes once either is configured — see docs/CONFIG.md.", ""},
+	}},
+	{"Health & Meta", []apiDocRoute{
+		{"GET", "/api/health", "Service health and version, always open.", ""},
+		{"GET", "/metrics", "Prometheus text-format metrics, always open.", "curl http://localhost:7654/metrics"},
+		{"GET", "/api/docs", "This page.", ""},
+	}},
+	{"Status Ingestion", []apiDocRoute{
+		{"POST", "/api/status", "Report a service's status. Requires auth once configured.", `curl -X POST /api/status -d '{"service_name":"db","status":"up","message":"ok","maintenance":false}'`},
+	}},
+	{"Services", []apiDocRoute{
+		{"GET", "/api/services", "Latest status, uptime %, 30-day history, group, and monitor type for every service.", ""},
+		{"GET", "/api/services/{name}/history?limit=&offset=", "Raw status_events for one service. limit capped at 500.", ""},
+		{"GET", "/api/services/{name}/export?format=csv|json", "Download a service's full status history.", ""},
+		{"PUT", "/api/services/{name}/group", "Assign a service to a group. Requires auth once configured.", `curl -X PUT /api/services/db/group -d '{"group":"data"}'`},
+		{"GET", "/api/services/{name}/metadata", "Container/host metadata (ports, image, IP) plus Lantern telemetry.", ""},
+		{"GET", "/api/services/{name}/uptime?range=1h|24h|7d|30d", "Uptime %, downtime, incident count, and graph datapoints.", ""},
+		{"GET", "/api/services/{name}/strip?hours=", "Bucketed status history for the trend bar (max 96 buckets).", ""},
+		{"GET", "/api/services/{name}/incidents?range=", "Detected down/degraded incidents with duration.", ""},
+	}},
+	{"Groups", []apiDocRoute{
+		{"GET", "/api/groups", "Every group name and its service count.", ""},
+	}},
+	{"Maintenance", []apiDocRoute{
+		{"GET", "/api/services/{name}/maintenance", "Current maintenance state for a service.", ""},
+		{"PUT", "/api/services/{name}/maintenance", "Enable/disable maintenance mode. Requires auth once configured.", `curl -X PUT /api/services/db/maintenance -d '{"enabled":true,"note":"upgrade"}'`},
+	}},
+	{"Active Monitoring", []apiDocRoute{
+		{"GET", "/api/monitors", "Every configured active monitor across all services.", ""},
+		{"GET", "/api/services/{name}/monitor", "Active monitor config for one service (404 if none).", ""},
+		{"PUT", "/api/services/{name}/monitor", "Create/update an active monitor. Requires auth once configured.", `curl -X PUT /api/services/db/monitor -d '{"monitor_type":"tcp","target":"db:5432","interval_seconds":60}'`},
+		{"DELETE", "/api/services/{name}/monitor", "Remove an active monitor (service reverts to push-only). Requires auth once configured.", ""},
+	}},
+	{"Diagnostics", []apiDocRoute{
+		{"POST", "/api/diagnostics", "Attach a diagnostic run (log dump, debug output) to a service. Requires auth once configured.", ""},
+		{"GET", "/api/diagnostics?service_name=&limit=&offset=", "List diagnostic runs, optionally filtered. limit capped at 500.", ""},
+		{"GET", "/api/diagnostics/{id}", "Full content of one diagnostic run.", ""},
+	}},
+	{"Activity", []apiDocRoute{
+		{"GET", "/api/activity?limit=", "Merged, timestamp-sorted feed of status changes and webhook deliveries across all services.", ""},
+	}},
+	{"Webhooks", []apiDocRoute{
+		{"GET", "/api/webhooks", "Configured webhook URLs per channel and their source (db/env/none).", ""},
+		{"PUT", "/api/webhooks", "Save webhook URL(s). Requires auth once configured.", `curl -X PUT /api/webhooks -d '{"discord":"https://discord.com/api/webhooks/..."}'`},
+		{"POST", "/api/webhooks/test", "Send a test message to one or all configured channels. Requires auth once configured.", `curl -X POST /api/webhooks/test -d '{"channel":"discord"}'`},
+		{"GET", "/api/webhooks/deliveries?limit=", "Recent delivery attempts (success/failure) across all channels.", ""},
+	}},
+	{"Docker Management", []apiDocRoute{
+		{"GET", "/api/services/{name}/docker/status", "Whether a matching container was found and its current state. Requires auth once configured.", ""},
+		{"POST", "/api/services/{name}/docker/restart", "Restart the matching container. Requires auth once configured.", ""},
+		{"GET", "/api/services/{name}/docker/logs?tail=", "Recent container logs (tail capped at 1000 lines). Requires auth once configured.", ""},
+	}},
+	{"Backup", []apiDocRoute{
+		{"GET", "/api/backup", "Download a consistent database snapshot (VACUUM INTO). See docs/BACKUP.md for restore steps.", ""},
+	}},
+	{"Real-time", []apiDocRoute{
+		{"WS", "/ws", "WebSocket: broadcasts {type:\"status_update\", service:{...}} on every status change. Same auth as the rest of the app.", ""},
+	}},
+	{"Public (always unauthenticated)", []apiDocRoute{
+		{"GET", "/api/public/services", "Same shape as /api/services — powers the public /status page.", ""},
+		{"GET", "/api/public/groups", "Same shape as /api/groups.", ""},
+		{"GET", "/api/public/services/{name}/metadata", "Same shape as the private metadata endpoint.", ""},
+		{"GET", "/api/public/services/{name}/uptime", "Same shape as the private uptime endpoint.", ""},
+		{"WS", "/api/public/ws", "WebSocket for the public status page — no auth, ever.", ""},
+	}},
+}
+
 func handleDocs() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<html><head><title>API Docs</title></head><body><h1>Lantern API Docs</h1></body></html>")
+		var b strings.Builder
+		b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Lantern API Reference</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0a0d14; color:#f8fafc; font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif; margin:0; padding:32px 24px 80px; line-height:1.5; }
+  .wrap { max-width:900px; margin:0 auto; }
+  h1 { font-size:24px; margin-bottom:4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:36px; }
+  h2 { font-size:15px; text-transform:uppercase; letter-spacing:0.5px; color:#94a3b8; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; margin:36px 0 12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:8px 10px; vertical-align:top; border-bottom:1px solid rgba(255,255,255,0.06); }
+  td.method { font-family:'JetBrains Mono',Consolas,monospace; font-weight:600; white-space:nowrap; width:70px; }
+  td.path { font-family:'JetBrains Mono',Consolas,monospace; color:#f8fafc; white-space:nowrap; }
+  td.desc { color:#94a3b8; }
+  .m-GET { color:#10b981; } .m-POST { color:#f59e0b; } .m-PUT { color:#60a5fa; } .m-DELETE { color:#f43f5e; } .m-WS { color:#8b5cf6; }
+  pre { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:8px 10px; margin-top:4px; font-size:11px; color:#94a3b8; overflow-x:auto; }
+</style></head><body><div class="wrap">
+<h1>Lantern API Reference</h1>
+<div class="sub">Generated from the live route table. See docs/API.md, docs/CONFIG.md, and docs/WEBHOOKS.md for more detail.</div>`)
+
+		for _, section := range apiDocSections {
+			fmt.Fprintf(&b, "<h2>%s</h2><table><tbody>", htmlEscape(section.Title))
+			for _, route := range section.Routes {
+				example := ""
+				if route.Example != "" {
+					example = "<pre>" + htmlEscape(route.Example) + "</pre>"
+				}
+				fmt.Fprintf(&b, `<tr><td class="method m-%s">%s</td><td class="path">%s</td><td class="desc">%s%s</td></tr>`,
+					htmlEscape(route.Method), htmlEscape(route.Method), htmlEscape(route.Path), htmlEscape(route.Desc), example)
+			}
+			b.WriteString("</tbody></table>")
+		}
+
+		b.WriteString("</div></body></html>")
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, b.String())
 	}
+}
+
+// htmlEscape escapes the handful of characters that matter when building
+// apiDocSections' hand-written text into the docs page's HTML.
+func htmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }
 
 // ---------------------------------------------------------------------------

@@ -320,7 +320,7 @@ func isProtectedEndpoint(r *http.Request) bool {
 // authMiddleware enforces HTTP Basic Auth or Bearer tokens.
 func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/public/") {
+		if strings.HasPrefix(r.URL.Path, "/api/public/") || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1372,6 +1372,66 @@ func handleHealth() http.HandlerFunc {
 	}
 }
 
+// handlePrometheusMetrics handles GET /metrics in Prometheus text exposition
+// format. Exempt from auth like /api/public/* — it only exposes what
+// /api/public/services already exposes, and Prometheus scrapers don't
+// typically send app-level bearer/basic auth.
+func handlePrometheusMetrics(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query(`
+SELECT s.service_name, s.status, COALESCE(g.group_name, '')
+FROM status_events s
+LEFT JOIN service_groups g ON s.service_name = g.service_name
+WHERE s.id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
+ORDER BY s.service_name ASC;`)
+		if err != nil {
+			http.Error(w, "database error", http.StatusInternalServerError)
+			return
+		}
+
+		type svcRow struct{ name, status, group string }
+		var services []svcRow
+		for rows.Next() {
+			var s svcRow
+			if err := rows.Scan(&s.name, &s.status, &s.group); err != nil {
+				continue
+			}
+			services = append(services, s)
+		}
+		rows.Close()
+
+		var b strings.Builder
+
+		b.WriteString("# HELP lantern_service_status Current status of the service (1 = up, 0 = not up)\n")
+		b.WriteString("# TYPE lantern_service_status gauge\n")
+		for _, s := range services {
+			val := 0
+			if s.status == "up" {
+				val = 1
+			}
+			fmt.Fprintf(&b, "lantern_service_status{service=%q,group=%q} %d\n", s.name, s.group, val)
+		}
+
+		b.WriteString("# HELP lantern_service_uptime_ratio Uptime ratio (0-1) over the given range\n")
+		b.WriteString("# TYPE lantern_service_uptime_ratio gauge\n")
+		for _, s := range services {
+			up7, up30, _ := getCachedOrComputeServiceMetrics(db, s.name)
+			fmt.Fprintf(&b, "lantern_service_uptime_ratio{service=%q,range=\"7d\"} %.4f\n", s.name, up7/100)
+			fmt.Fprintf(&b, "lantern_service_uptime_ratio{service=%q,range=\"30d\"} %.4f\n", s.name, up30/100)
+		}
+
+		b.WriteString("# HELP lantern_incident_count Distinct down/degraded incidents in the last 30 days\n")
+		b.WriteString("# TYPE lantern_incident_count gauge\n")
+		since30d := time.Now().UTC().Add(-30 * 24 * time.Hour)
+		for _, s := range services {
+			fmt.Fprintf(&b, "lantern_incident_count{service=%q} %d\n", s.name, countRecentIncidents(db, s.name, since30d))
+		}
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		w.Write([]byte(b.String()))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SPA / Static file handler
 // ---------------------------------------------------------------------------
@@ -1745,6 +1805,10 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	// handshake writes its own headers via Hijack) ---
 	r.Handle("/ws", handleWS(hub)).Methods(http.MethodGet)
 	r.Handle("/api/public/ws", handleWS(hub)).Methods(http.MethodGet)
+
+	// --- Prometheus metrics (plain text, not JSON — registered outside
+	// the /api subrouter's jsonMiddleware) ---
+	r.Handle("/metrics", handlePrometheusMetrics(db)).Methods(http.MethodGet)
 
 	// --- API routes ---
 	api := r.PathPrefix("/api").Subrouter()

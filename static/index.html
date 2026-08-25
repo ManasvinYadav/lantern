@@ -2508,6 +2508,35 @@
               monitorWrap.remove();
             }
 
+            // Trend bar / uptime% label previously only rendered on initial
+            // card creation and never updated again — meaning the 30-day
+            // history graph and uptime% froze at whatever they were on
+            // first page load, even as live WebSocket pushes and polling
+            // kept everything else current. Cheap fingerprint guard avoids
+            // rebuilding the (up to 96-block) bar on every render call for
+            // cards whose history hasn't actually changed.
+            const trendBar = card.querySelector('.trend-bar');
+            if (trendBar) {
+              const history = Array.isArray(s.history) ? s.history : [];
+              const fingerprint = history.map(b => b.status || 'empty').join(',');
+              if (trendBar.dataset.fingerprint !== fingerprint) {
+                trendBar.innerHTML = history.length > 0
+                  ? history.map(b => {
+                      const bcls = b.status || 'empty';
+                      const date = new Date(b.start).toLocaleDateString();
+                      return `<div class="trend-block ${bcls}" data-tooltip="${date} - ${bcls.toUpperCase()}"></div>`;
+                    }).join('')
+                  : Array(30).fill('<div class="trend-block empty"></div>').join('');
+                trendBar.dataset.fingerprint = fingerprint;
+              }
+            }
+
+            const uptimeLabel = card.querySelector('.uptime-pct-label');
+            if (uptimeLabel) {
+              const uptimeText = s.uptime_percent !== undefined && s.uptime_percent !== null ? s.uptime_percent.toFixed(1) + '%' : '--%';
+              if (uptimeLabel.innerText !== uptimeText) uptimeLabel.innerText = uptimeText;
+            }
+
             if (grid.children[index] !== card) {
               grid.insertBefore(card, grid.children[index]);
             }
