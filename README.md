@@ -6,7 +6,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.5.0)
+## Features (v0.59.1)
 
 - **Real-time Dashboard**: A WebSocket connection pushes status changes to every open dashboard within about a second of them happening, with automatic reconnection and a manual-refresh fallback. Cards glow briefly in their status color when a live update lands.
 - **Push-based Heartbeats**: Services report their own status via `POST /api/status`. No active scraping means Lantern can run securely behind NATs or on the edge.
