@@ -51,7 +51,6 @@
       --accent: #10b981;
       --accent-glow: rgba(16, 185, 129, 0.25);
       --accent-bg: rgba(16, 185, 129, 0.1);
-      --on-accent: #ffffff;
 
       /* Semantic status */
       --up: #10b981;
@@ -89,6 +88,20 @@
 
       --info: #3b82f6;
       --info-bg: rgba(59, 130, 246, 0.15);
+
+      /* Form fields sit a step below the card they live on, so a control
+         reads as recessed rather than as another raised panel. */
+      --field-bg: #1f2937;
+      /* The brief's #374151 measures 1.68:1 against --surface-1, under the
+         3:1 that WCAG 1.4.11 wants for a control boundary. The fill keeps
+         the specified value; the boundary is lifted until it reads. */
+      --field-border: #6b7280;
+      --accent-ring: rgba(16, 185, 129, 0.35);
+      --focus-border: var(--accent);
+      /* Text drawn ON the accent fill. Emerald is bright enough that white
+         measures only 2.56:1 on it, so the default is dark; setAccentColor
+         recomputes this from luminance when a custom accent is chosen. */
+      --on-accent: #0b1220;
 
       /* Heartbeat block fills — a three-step neutral ramp sitting below the
          vivid statuses: unknown > maintenance > empty. */
@@ -160,6 +173,8 @@
       --border: rgba(255, 255, 255, 0.12);
       --border-strong: rgba(255, 255, 255, 0.2);
       --beat-empty: rgba(255, 255, 255, 0.07);
+      --field-bg: rgba(255, 255, 255, 0.06);
+      --field-border: rgba(255, 255, 255, 0.42);
     }
 
     /* Light */
@@ -209,6 +224,13 @@
       --beat-unknown: #94a3b8;
       --beat-maint: #cbd5e1;
       --beat-empty: #e2e8f0;
+
+      /* #ffffff would be invisible against a white modal surface. */
+      --field-bg: #f8fafc;
+      --field-border: #64748b;
+      /* Emerald measures 2.54:1 on a light field; the focus indicator
+         needs 3:1, so light darkens it the same way --up is darkened. */
+      --focus-border: #047857;
 
       /* Deliberate inversion: a dark popover on a light page. */
       --tooltip-bg: #0f172a;
@@ -872,21 +894,75 @@
       justify-content: space-between;
       align-items: center;
     }
-    .form-input {
+    .form-input,
+    select.form-input,
+    textarea.form-input {
       width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border);
+      background: var(--field-bg);
+      border: 1px solid var(--field-border);
       border-radius: var(--radius-sm);
       padding: 8px 12px;
       font-size: 13px;
       color: var(--text-primary);
       font-family: var(--font-sans);
       outline: none;
-      transition: border-color 0.2s;
+      /* Compositor-friendly: box-shadow and colour only, no layout. */
+      transition: border-color var(--duration-fast) var(--ease-out),
+                  box-shadow var(--duration-fast) var(--ease-out);
     }
+    .form-input::placeholder { color: var(--text-muted); }
+    .form-input:hover:not(:focus) { border-color: var(--border-focus); }
     .form-input:focus {
-      border-color: var(--accent, var(--border-focus));
+      border-color: var(--focus-border);
+      box-shadow: 0 0 0 2px var(--accent-ring);
     }
+    .form-input.invalid {
+      border-color: var(--down);
+    }
+    .form-input.invalid:focus {
+      box-shadow: 0 0 0 2px var(--down-glow);
+    }
+    .form-input:disabled,
+    .form-input[readonly] {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+    .form-error {
+      font-size: var(--text-xs);
+      color: var(--down-fg);
+      display: flex; align-items: center; gap: 5px;
+    }
+    .form-error::before { content: '\26A0'; font-size: 10px; }
+
+    /* Toggle switch. A real <button role="switch">, so Space and Enter come
+       from the platform rather than a keydown handler. */
+    .toggle {
+      position: relative; flex-shrink: 0;
+      width: 38px; height: 22px; padding: 0;
+      border-radius: 999px; cursor: pointer;
+      background: var(--field-bg);
+      border: 1px solid var(--field-border);
+      transition: background-color var(--duration-fast) var(--ease-out),
+                  border-color var(--duration-fast) var(--ease-out);
+    }
+    .toggle::after {
+      content: ''; position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--text-muted);
+      transition: transform var(--duration-fast) var(--ease-out),
+                  background-color var(--duration-fast) var(--ease-out);
+    }
+    .toggle[aria-checked="true"] { background: var(--accent-bg); border-color: var(--accent); }
+    .toggle[aria-checked="true"]::after { transform: translateX(16px); background: var(--accent); }
+    .toggle:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+    .toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: var(--space-4);
+    }
+    .toggle-label { font-size: var(--text-base); font-weight: 500; color: var(--text-primary); }
+    .toggle-hint { font-size: var(--text-sm); color: var(--text-muted); margin-top: 2px; }
     .theme-btn {
       flex: 1; justify-content: center; text-align: center;
       transition: all 0.2s;
@@ -1170,6 +1246,15 @@
       document.documentElement.style.setProperty('--accent', accent);
       document.documentElement.style.setProperty('--accent-glow', accent + '40');
       document.documentElement.style.setProperty('--accent-bg', accent + '20');
+      document.documentElement.style.setProperty('--accent-ring', accent + '59');
+      document.documentElement.style.setProperty('--on-accent',
+        (function (h) {
+          const m = /^#?([0-9a-f]{6})$/i.exec(h || '');
+          if (!m) return '#ffffff';
+          const c = (i) => { const x = parseInt(m[1].substr(i, 2), 16) / 255;
+            return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+          return (0.2126 * c(0) + 0.7152 * c(2) + 0.0722 * c(4)) > 0.18 ? '#0b1220' : '#ffffff';
+        })(accent));
       // The accent deliberately does NOT repaint --up/--down/--degraded.
       // Those are semantic. This block used to override --up here, so any
       // visitor with a stored accent would still have had it applied on
@@ -1291,7 +1376,7 @@
             <div style="font-weight: 500; margin-bottom: 2px;">Maintenance Mode</div>
             <div style="font-size: 12px; color: var(--text-muted);">Suppress alerts and mark as under maintenance</div>
           </div>
-          <button class="btn" id="btnToggleMaint">Enable</button>
+          <button type="button" class="toggle" role="switch" aria-checked="false" id="btnToggleMaint" aria-label="Maintenance mode"></button>
         </div>
 
         <!-- Docker Management & Logs (Admin) -->
@@ -1878,6 +1963,138 @@
       if (activeBeatBlock) hideBeatTooltip();
     }, { passive: true });
 
+    // ---- Toggle switches ----------------------------------------------------
+    // <button role="switch">, so Space and Enter are handled by the platform.
+    // The click handler is delegated, so a toggle rendered later needs no
+    // rebinding. Consumers listen for the toggle-change event.
+    function setToggle(el, on) {
+      if (el) el.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    function toggleIsOn(el) {
+      return !!el && el.getAttribute('aria-checked') === 'true';
+    }
+
+    // ---- Inline validation --------------------------------------------------
+    // Errors appear once a field has been left (blur) and clear the moment the
+    // value becomes valid, so a half-typed URL isn't flagged mid-keystroke.
+    function setFieldError(input, message) {
+      if (!input) return !message;
+      const group = input.closest('.form-group') || input.parentElement;
+      let err = group && group.querySelector('.form-error');
+      if (message) {
+        if (!err && group) {
+          err = document.createElement('div');
+          err.className = 'form-error';
+          err.id = (input.id || 'field') + '-error';
+          err.setAttribute('role', 'alert');
+          group.appendChild(err);
+        }
+        if (err) {
+          err.innerText = message;
+          input.setAttribute('aria-describedby', err.id);
+        }
+        input.classList.add('invalid');
+        input.setAttribute('aria-invalid', 'true');
+      } else {
+        if (err) err.remove();
+        input.classList.remove('invalid');
+        input.removeAttribute('aria-invalid');
+        input.removeAttribute('aria-describedby');
+      }
+      return !message;
+    }
+
+    function isHttpUrl(v) {
+      try {
+        const u = new URL(v);
+        return u.protocol === 'http:' || u.protocol === 'https:';
+      } catch (e) { return false; }
+    }
+
+    // Target shape follows whatever probe the backend will actually run
+    // (see runCheck in monitors.go).
+    function validateMonitorTarget(type, target) {
+      if (!target) return 'Target is required';
+      if (type === 'http') {
+        return isHttpUrl(target) ? '' : 'Must be a full http:// or https:// URL';
+      }
+      if (type === 'tcp') {
+        const m = target.match(/^([A-Za-z0-9._-]+):(\d{1,5})$/);
+        if (!m) return 'Use host:port, e.g. db.local:5432';
+        const port = parseInt(m[2], 10);
+        return (port >= 1 && port <= 65535) ? '' : 'Port must be between 1 and 65535';
+      }
+      return /^[A-Za-z0-9._-]+$/.test(target)
+        ? '' : 'Use a bare hostname or IP, with no scheme or port';
+    }
+
+    function monitorFormErrors() {
+      const nameEl = document.getElementById('monitorServiceName');
+      const typeEl = document.getElementById('monitorType');
+      const targetEl = document.getElementById('monitorTarget');
+      const ivEl = document.getElementById('monitorInterval');
+      if (!nameEl || !typeEl || !targetEl || !ivEl) return {};
+      const iv = parseInt(ivEl.value, 10);
+      return {
+        monitorServiceName: (nameEl.value || '').trim() ? '' : 'Service name is required',
+        monitorTarget: validateMonitorTarget(typeEl.value, (targetEl.value || '').trim()),
+        monitorInterval: (isFinite(iv) && iv >= 10 && iv <= 3600)
+          ? '' : 'Interval must be between 10 and 3600 seconds'
+      };
+    }
+
+    function refreshMonitorValidity() {
+      const errs = monitorFormErrors();
+      const ids = Object.keys(errs);
+      if (!ids.length) return false;
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        setFieldError(el, (el && el.dataset.touched === '1') ? errs[id] : '');
+      });
+      const ok = ids.every(id => !errs[id]);
+      const btn = document.getElementById('btnSaveMonitor');
+      if (btn) btn.disabled = !ok;
+      return ok;
+    }
+
+    function resetMonitorValidation() {
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        delete el.dataset.touched;
+        setFieldError(el, '');
+      });
+    }
+
+    function refreshWebhookValidity() {
+      let ok = true;
+      ['discord', 'telegram', 'gotify', 'generic'].forEach(ch => {
+        const el = document.getElementById('wh-' + ch);
+        if (!el) return;
+        const v = (el.value || '').trim();
+        const err = (v && !isHttpUrl(v)) ? 'Must be a full http:// or https:// URL' : '';
+        if (err) ok = false;
+        setFieldError(el, el.dataset.touched === '1' ? err : '');
+      });
+      const btn = document.getElementById('btnSaveWebhooks');
+      if (btn) btn.disabled = !ok;
+      return ok;
+    }
+
+    function bindValidation() {
+      const wire = (id, refresh) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', refresh);
+        el.addEventListener('change', () => { el.dataset.touched = '1'; refresh(); });
+        el.addEventListener('blur', () => { el.dataset.touched = '1'; refresh(); });
+      };
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval']
+        .forEach(id => wire(id, refreshMonitorValidity));
+      ['wh-discord', 'wh-telegram', 'wh-gotify', 'wh-generic']
+        .forEach(id => wire(id, refreshWebhookValidity));
+    }
+
     // Initialization
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -2054,6 +2271,17 @@
         });
       });
 
+      // Toggles: one delegated handler covers every switch on the page.
+      document.addEventListener('click', (e) => {
+        const t = e.target && e.target.closest && e.target.closest('.toggle');
+        if (!t || t.disabled) return;
+        const next = !toggleIsOn(t);
+        setToggle(t, next);
+        t.dispatchEvent(new CustomEvent('toggle-change', { bubbles: true, detail: { on: next } }));
+      });
+
+      bindValidation();
+
       // Any control can dismiss its own layer declaratively.
       document.addEventListener('click', (e) => {
         const closer = e.target && e.target.closest && e.target.closest('[data-close-overlay]');
@@ -2108,26 +2336,30 @@
         document.getElementById('diagTabActivity').addEventListener('click', () => switchDiagTab('activity'));
 
         // Maintenance Toggle
-        document.getElementById('btnToggleMaint').addEventListener('click', async () => {
-          if (!state.activeService) return;
+        // The delegated .toggle handler has already flipped aria-checked by
+        // the time this runs; the request either confirms it or we roll back.
+        document.getElementById('btnToggleMaint').addEventListener('toggle-change', async (e) => {
           const btn = document.getElementById('btnToggleMaint');
-          const current = btn.innerText === 'Disable';
+          if (!state.activeService) { setToggle(btn, !e.detail.on); return; }
+          const want = e.detail.on;
+          btn.disabled = true;
           try {
             const res = await authFetch(API.maintenance(state.activeService), {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ enabled: !current, note: 'Toggled via UI' })
+              body: JSON.stringify({ enabled: want, note: 'Toggled via UI' })
             });
-            if (res.ok) {
-              const data = await res.json();
-              btn.innerText = data.enabled ? 'Disable' : 'Enable';
-              btn.className = data.enabled ? 'btn' : 'btn primary';
-              showToast(`Maintenance mode ${data.enabled ? 'enabled' : 'disabled'} for ${state.activeService}`, 'warning');
-              loadData();
-            }
-          } catch(e) {
-            console.error(e);
+            if (!res.ok) throw new Error('request failed');
+            const data = await res.json();
+            setToggle(btn, !!data.enabled);
+            showToast(`Maintenance mode ${data.enabled ? 'enabled' : 'disabled'} for ${state.activeService}`, 'warning');
+            loadData();
+          } catch (err) {
+            setToggle(btn, !want);   // roll back the optimistic flip
+            console.error(err);
             showToast('Failed to toggle maintenance mode', 'error');
+          } finally {
+            btn.disabled = false;
           }
         });
 
@@ -2321,6 +2553,24 @@
       });
     }
 
+    // Relative luminance (WCAG 2.x) for a #rrggbb string.
+    function hexLuminance(hex) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+      if (!m) return 0;
+      const v = m[1];
+      const ch = (i) => {
+        const x = parseInt(v.substr(i, 2), 16) / 255;
+        return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * ch(0) + 0.7152 * ch(2) + 0.0722 * ch(4);
+    }
+
+    // Text sitting on the accent fill has to stay legible whichever swatch the
+    // user picks: white fails on emerald (2.56:1), black fails on violet.
+    function onAccentFor(color) {
+      return hexLuminance(color) > 0.18 ? '#0b1220' : '#ffffff';
+    }
+
     function setAccentColor(color) {
       const hexDisp = document.getElementById('accentHexDisplay');
       const picker = document.getElementById('accentPicker');
@@ -2338,6 +2588,8 @@
         document.documentElement.style.removeProperty('--accent');
         document.documentElement.style.removeProperty('--accent-glow');
         document.documentElement.style.removeProperty('--accent-bg');
+        document.documentElement.style.removeProperty('--accent-ring');
+        document.documentElement.style.removeProperty('--on-accent');
         localStorage.removeItem('lantern_accent');
         if (hexDisp) hexDisp.innerText = 'Default';
         if (picker) picker.value = '#10b981';
@@ -2345,6 +2597,9 @@
         document.documentElement.style.setProperty('--accent', color);
         document.documentElement.style.setProperty('--accent-glow', color + '40');
         document.documentElement.style.setProperty('--accent-bg', color + '20');
+        // 0.35 alpha for the focus ring, a touch stronger than the glow.
+        document.documentElement.style.setProperty('--accent-ring', color + '59');
+        document.documentElement.style.setProperty('--on-accent', onAccentFor(color));
         localStorage.setItem('lantern_accent', color);
         if (hexDisp) hexDisp.innerText = color;
         if (picker) picker.value = color;
@@ -2453,6 +2708,8 @@
       typeEl.value = 'http';
       intervalEl.value = '60';
       targetEl.value = '';
+      setToggle(document.getElementById('monitorEnabled'), true);
+      resetMonitorValidation();
       if (title) title.innerText = serviceName ? ('Monitor — ' + serviceName) : 'Add Monitor';
 
       if (serviceName) {
@@ -2466,10 +2723,12 @@
               typeEl.value = m.monitor_type;
               intervalEl.value = m.interval_seconds || 60;
               targetEl.value = m.target || '';
+              setToggle(document.getElementById('monitorEnabled'), m.enabled !== false);
             }
           }
         } catch (err) { /* leave the blank form up */ }
       }
+      refreshMonitorValidity();
       openOverlay('monitorModalOverlay');
     }
 
@@ -2481,15 +2740,20 @@
       const target = (document.getElementById('monitorTarget').value || '').trim();
       const interval_seconds = parseInt(document.getElementById('monitorInterval').value, 10) || 60;
 
-      if (!name) { showToast('Service name is required', 'error'); return; }
-      if (!target) { showToast('Target is required', 'error'); return; }
+      // Surface every problem at once rather than one toast at a time.
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.dataset.touched = '1';
+      });
+      if (!refreshMonitorValidity()) return;
 
+      const enabled = toggleIsOn(document.getElementById('monitorEnabled'));
       btn.disabled = true;
       try {
         const res = await authFetch(API.serviceMonitor(name), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: true })
+          body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: enabled })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save monitor');
@@ -2591,6 +2855,11 @@
     }
 
     async function saveWebhookSettings() {
+      ['wh-discord', 'wh-telegram', 'wh-gotify', 'wh-generic'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.dataset.touched = '1';
+      });
+      if (!refreshWebhookValidity()) return;
       const btn = document.getElementById('btnSaveWebhooks');
       const statusEl = document.getElementById('webhookSaveStatus');
       const payload = {
@@ -3095,7 +3364,7 @@
       document.getElementById('sdIncidents').innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading...</div>';
       document.getElementById('uptimeSvg').innerHTML = '';
       const maintBtn = document.getElementById('btnToggleMaint');
-      maintBtn.innerText = '...';
+      maintBtn.disabled = true;
 
       openDrawer('serviceDrawerOverlay');
 
@@ -3108,8 +3377,8 @@
       // Fetch Data
       if(!isPublic) {
         fetch(API.maintenance(name)).then(r=>r.json()).then(d => {
-          maintBtn.innerText = d.enabled ? 'Disable' : 'Enable';
-          maintBtn.className = d.enabled ? 'btn' : 'btn primary';
+          setToggle(maintBtn, !!d.enabled);
+          maintBtn.disabled = false;
         }).catch(e=>console.error());
 
         fetch(API.history(name)).then(r=>r.json()).then(d => {
@@ -3700,6 +3969,14 @@
         <div class="form-group">
           <div class="form-label"><span>Target</span></div>
           <input type="text" class="form-input" id="monitorTarget" placeholder="http://host:port/path, or host:port, or host" autocomplete="off" />
+        </div>
+
+        <div class="toggle-row" style="padding-top:4px;">
+          <div>
+            <div class="toggle-label">Enabled</div>
+            <div class="toggle-hint">Turn off to keep the configuration but stop probing.</div>
+          </div>
+          <button type="button" class="toggle" role="switch" aria-checked="true" id="monitorEnabled" aria-label="Monitor enabled"></button>
         </div>
       </div>
       <div class="modal-footer">
