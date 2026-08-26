@@ -520,17 +520,51 @@
     .badge-count { background: var(--panel-bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 20px; font-size: 12px; color: var(--text-secondary); }
 
     .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+    /* Pills are <button> so they are keyboard-reachable; they were <div>. */
     .filter-pill {
-      padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px;
+      font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
       background: var(--panel-bg); color: var(--text-secondary); border: 1px solid var(--border);
-      transition: all 0.2s;
+      transition: background-color var(--duration-fast) var(--ease-out),
+                  color var(--duration-fast) var(--ease-out),
+                  border-color var(--duration-fast) var(--ease-out),
+                  box-shadow var(--duration-fast) var(--ease-out);
     }
     .filter-pill:hover { background: var(--panel-hover); color: var(--text-primary); border-color: var(--accent); }
+    .filter-pill:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
     .filter-pill.active {
       background: var(--accent) !important;
       color: var(--on-accent) !important;
       border-color: var(--accent) !important;
       box-shadow: 0 0 12px var(--accent-glow) !important;
+    }
+    .filter-pill[data-empty="1"]:not(.active) { opacity: 0.5; }
+    .pill-count {
+      font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+      font-variant-numeric: tabular-nums; opacity: 0.75;
+    }
+    .filter-group-label {
+      font-size: var(--text-xs); color: var(--text-muted); font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.5px; align-self: center;
+      margin-right: 2px;
+    }
+
+    /* Keyboard hint inside the search field. */
+    .search-kbd {
+      position: absolute; right: 8px; pointer-events: none;
+      font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+      color: var(--text-muted);
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 5px;
+      transition: opacity var(--duration-fast) var(--ease-out);
+    }
+    .search-box-wrap.has-query .search-kbd,
+    .search-box-wrap:focus-within .search-kbd { opacity: 0; }
+
+    @keyframes empty-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
 
     .services-grid {
@@ -1297,6 +1331,7 @@
       100% { opacity: 0.3; }
     }
     .empty-state {
+      animation: empty-in var(--duration-base) var(--ease-out);
       grid-column: 1 / -1;
       display: flex;
       flex-direction: column;
@@ -1489,16 +1524,26 @@
         </div>
         <div class="search-box-wrap">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-          <input type="text" id="serviceSearchInput" class="search-input" placeholder="Search services..." />
-          <button id="searchClearBtn" class="search-clear-btn" style="display:none;">✕</button>
+          <input type="text" id="serviceSearchInput" class="search-input" placeholder="Search services…" autocomplete="off" aria-label="Search services" />
+          <kbd class="search-kbd" id="searchKbdHint">⌘K</kbd>
+          <button id="searchClearBtn" class="search-clear-btn" style="display:none;" aria-label="Clear search">✕</button>
         </div>
       </div>
       <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div class="filters" id="statusFilters">
-          <div class="filter-pill active" data-filter="all">All</div>
-          <div class="filter-pill" data-filter="down">Down</div>
-          <div class="filter-pill" data-filter="degraded">Degraded</div>
-          <div class="filter-pill hide-public" data-filter="maintenance">Maintenance</div>
+        <div class="filters" id="sourceFilters" role="group" aria-label="Filter by source">
+          <span class="filter-group-label">Source</span>
+          <button type="button" class="filter-pill active" data-source="all">All <span class="pill-count" data-count-for="all">0</span></button>
+          <button type="button" class="filter-pill" data-source="docker">Docker <span class="pill-count" data-count-for="docker">0</span></button>
+          <button type="button" class="filter-pill" data-source="host">Host <span class="pill-count" data-count-for="host">0</span></button>
+          <button type="button" class="filter-pill" data-source="monitor">Monitored <span class="pill-count" data-count-for="monitor">0</span></button>
+        </div>
+        <div class="filters" id="statusFilters" role="group" aria-label="Filter by status">
+          <span class="filter-group-label">Status</span>
+          <button type="button" class="filter-pill active" data-filter="all">All</button>
+          <button type="button" class="filter-pill" data-filter="issues">Issues Only</button>
+          <button type="button" class="filter-pill" data-filter="down">Down</button>
+          <button type="button" class="filter-pill" data-filter="degraded">Degraded</button>
+          <button type="button" class="filter-pill hide-public" data-filter="maintenance">Maintenance</button>
         </div>
         <div class="group-filter-wrap">
           <select id="groupFilterSelect" class="btn" style="font-size:12px; padding:5px 10px; cursor:pointer; outline:none;">
@@ -1792,6 +1837,7 @@
       filter: 'all',
       groupFilter: '',
       searchQuery: '',
+      sourceFilter: 'all',
       strips: {},
       diagFilter: '',
       activeService: null,
@@ -2429,6 +2475,87 @@
       }
     }
 
+    // ---- Fuzzy matching -----------------------------------------------------
+    // Subsequence scoring, deliberately small: the zero-dependency constraint
+    // rules out a library, and the corpus is a few dozen short strings. Exact
+    // prefix beats substring beats scattered subsequence; within a subsequence,
+    // characters landing on a word boundary or continuing a run score higher,
+    // so "nb" ranks "netbird" above "n8n-backup".
+    function fuzzyScore(needle, haystack) {
+      const n = (needle || '').toLowerCase();
+      const h = (haystack || '').toLowerCase();
+      if (!n) return 0;
+      if (!h) return -1;
+
+      const direct = h.indexOf(n);
+      if (direct === 0) return 1000 - h.length * 0.1;
+      if (direct > 0) return 700 - direct - h.length * 0.1;
+
+      let score = 0, hi = 0, prev = -2;
+      for (let ni = 0; ni < n.length; ni++) {
+        let found = -1;
+        while (hi < h.length) {
+          if (h[hi] === n[ni]) { found = hi; break; }
+          hi++;
+        }
+        if (found === -1) return -1;   // not even a subsequence
+        const boundary = found === 0 || /[^a-z0-9]/.test(h[found - 1]);
+        score += 10 + (boundary ? 15 : 0) + (found === prev + 1 ? 12 : 0);
+        prev = found;
+        hi = found + 1;
+      }
+      return score - h.length * 0.1;
+    }
+
+    // Best score across the fields worth searching, weighted so a name match
+    // outranks an incidental hit in a status message.
+    function serviceMatchScore(svc, query) {
+      if (!query) return 0;
+      const fields = [
+        [svc.service_name, 1.0],
+        [svc.group_name, 0.8],
+        [svc.status, 0.7],
+        [svc.source, 0.7],
+        [svc.message, 0.5]
+      ];
+      let best = -1;
+      for (let i = 0; i < fields.length; i++) {
+        const value = fields[i][0];
+        if (!value) continue;
+        const sc = fuzzyScore(query, String(value));
+        if (sc >= 0) best = Math.max(best, sc * fields[i][1]);
+      }
+      return best;
+    }
+
+    function clearServiceSearch() {
+      const input = document.getElementById('serviceSearchInput');
+      const clearBtn = document.getElementById('searchClearBtn');
+      const wrap = input && input.closest('.search-box-wrap');
+      if (input) input.value = '';
+      state.searchQuery = '';
+      if (clearBtn) clearBtn.style.display = 'none';
+      if (wrap) wrap.classList.remove('has-query');
+      renderServices();
+    }
+
+    // Live counts on the source pills, and a dimmed state for a category with
+    // nothing in it, so an empty filter is visible before it is clicked.
+    function updateSourceFilterCounts() {
+      const counts = { all: 0, docker: 0, host: 0, monitor: 0 };
+      (state.services || []).forEach(s => {
+        const src = s.source || 'host';
+        counts.all++;
+        if (counts[src] !== undefined) counts[src]++;
+      });
+      Object.keys(counts).forEach(key => {
+        const el = document.querySelector(`.pill-count[data-count-for="${key}"]`);
+        if (el) el.innerText = counts[key];
+        const pill = document.querySelector(`#sourceFilters .filter-pill[data-source="${key}"]`);
+        if (pill) pill.dataset.empty = counts[key] === 0 ? '1' : '0';
+      });
+    }
+
     // Initialization
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -2526,6 +2653,8 @@
           if (searchClearBtn) {
             searchClearBtn.style.display = val ? 'block' : 'none';
           }
+          const wrap = e.target.closest('.search-box-wrap');
+          if (wrap) wrap.classList.toggle('has-query', !!val);
           if (searchRaf) cancelAnimationFrame(searchRaf);
           searchRaf = requestAnimationFrame(() => {
             renderServices();
@@ -2533,12 +2662,7 @@
         });
       }
       if (searchClearBtn) {
-        searchClearBtn.addEventListener('click', () => {
-          if (searchInput) searchInput.value = '';
-          state.searchQuery = '';
-          searchClearBtn.style.display = 'none';
-          renderServices();
-        });
+        searchClearBtn.addEventListener('click', clearServiceSearch);
       }
 
       // Group Filter Select
@@ -2550,14 +2674,54 @@
         });
       }
 
-      // Status Filters
-      document.querySelectorAll('.filter-pill').forEach(pill => {
+      // Filter pills. Scoped per row -- the two rows filter independently, so
+      // clearing .active across every pill (as this used to) would wipe the
+      // other row's selection.
+      document.querySelectorAll('#statusFilters .filter-pill').forEach(pill => {
         pill.addEventListener('click', (e) => {
-          document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+          document.querySelectorAll('#statusFilters .filter-pill').forEach(p => p.classList.remove('active'));
           e.currentTarget.classList.add('active');
           state.filter = e.currentTarget.dataset.filter;
           renderServices();
         });
+      });
+      document.querySelectorAll('#sourceFilters .filter-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+          document.querySelectorAll('#sourceFilters .filter-pill').forEach(p => p.classList.remove('active'));
+          e.currentTarget.classList.add('active');
+          state.sourceFilter = e.currentTarget.dataset.source;
+          renderServices();
+        });
+      });
+
+      // Cmd/Ctrl+K or a bare "/" focuses search; Escape clears it. Guarded so
+      // it never steals a key from a dialog, an open card menu, or any field
+      // the user is already typing in.
+      document.addEventListener('keydown', (e) => {
+        const input = document.getElementById('serviceSearchInput');
+        if (!input) return;
+        const t = e.target;
+        const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
+          || t.tagName === 'SELECT' || t.isContentEditable);
+
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+          if (overlayStack.length) return;
+          e.preventDefault();
+          input.focus();
+          input.select();
+          return;
+        }
+        if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (overlayStack.length || cardMenuService) return;
+          e.preventDefault();
+          input.focus();
+          return;
+        }
+        if (e.key === 'Escape' && document.activeElement === input) {
+          e.preventDefault();
+          clearServiceSearch();
+          input.blur();
+        }
       });
 
       // Uptime Range Selector Tabs
@@ -3560,9 +3724,15 @@
       if (!grid) return;
       let filtered = state.services || [];
       
-      // 1. Status Filter
+      // 1. Source Filter (docker / host / monitor)
+      if (state.sourceFilter && state.sourceFilter !== 'all') {
+        filtered = filtered.filter(s => (s.source || 'host') === state.sourceFilter);
+      }
+
+      // 2. Status Filter
       if (state.filter !== 'all') {
         filtered = filtered.filter(s => {
+          if (state.filter === 'issues') return s.status === 'down' || s.status === 'degraded';
           if (state.filter === 'down') return s.status === 'down';
           if (state.filter === 'degraded') return s.status === 'degraded';
           if (state.filter === 'maintenance') return s.maintenance;
@@ -3575,15 +3745,17 @@
         filtered = filtered.filter(s => (s.group_name || '').toLowerCase() === state.groupFilter.toLowerCase());
       }
 
-      // 3. Search Query Filter
+      // 4. Fuzzy search. Ranked, so the closest match leads; without a query
+      // the API's own ordering is preserved.
       if (state.searchQuery) {
-        const q = state.searchQuery;
-        filtered = filtered.filter(s => 
-          s.service_name.toLowerCase().includes(q) ||
-          (s.group_name && s.group_name.toLowerCase().includes(q)) ||
-          (s.message && s.message.toLowerCase().includes(q))
-        );
+        filtered = filtered
+          .map(s => ({ svc: s, score: serviceMatchScore(s, state.searchQuery) }))
+          .filter(x => x.score >= 0)
+          .sort((a, b) => b.score - a.score)
+          .map(x => x.svc);
       }
+
+      updateSourceFilterCounts();
 
       const countEl = document.getElementById('serviceCount');
       if (countEl) countEl.innerText = filtered.length;
@@ -3593,7 +3765,7 @@
           <div class="empty-state">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <div class="empty-state-title">No services found</div>
-            <div class="empty-state-sub">No services match your active search filter or status selection.</div>
+            <div class="empty-state-sub">${emptyStateReason()}</div>
             <button class="btn" onclick="resetFilters()">Reset Filters</button>
           </div>`;
         return;
@@ -3735,8 +3907,21 @@
       });
     }
 
+    // Names the filters that are actually active, so the empty state says
+    // which one to undo rather than "check your filters".
+    function emptyStateReason() {
+      const active = [];
+      if (state.searchQuery) active.push(`search “${escapeHtml(state.searchQuery)}”`);
+      if (state.sourceFilter && state.sourceFilter !== 'all') active.push(`source “${escapeHtml(state.sourceFilter)}”`);
+      if (state.filter !== 'all') active.push(`status “${escapeHtml(state.filter)}”`);
+      if (state.groupFilter) active.push(`group “${escapeHtml(state.groupFilter)}”`);
+      if (!active.length) return 'No services have reported in yet.';
+      return 'Nothing matches ' + active.join(' + ') + '.';
+    }
+
     window.resetFilters = function() {
       state.filter = 'all';
+      state.sourceFilter = 'all';
       state.groupFilter = '';
       state.searchQuery = '';
       const sInput = document.getElementById('serviceSearchInput');
@@ -3745,9 +3930,11 @@
       if (sClear) sClear.style.display = 'none';
       const gSel = document.getElementById('groupFilterSelect');
       if (gSel) gSel.value = '';
-      document.querySelectorAll('.filter-pill').forEach(p => {
-        if (p.dataset.filter === 'all') p.classList.add('active');
-        else p.classList.remove('active');
+      document.querySelectorAll('#statusFilters .filter-pill').forEach(p => {
+        p.classList.toggle('active', p.dataset.filter === 'all');
+      });
+      document.querySelectorAll('#sourceFilters .filter-pill').forEach(p => {
+        p.classList.toggle('active', p.dataset.source === 'all');
       });
       renderServices();
     };
