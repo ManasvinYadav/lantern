@@ -996,6 +996,31 @@
     .login-error::before { content: '\26A0'; font-size: 11px; }
     [hidden] { display: none !important; }
 
+    /* ---- Account & Security ---------------------------------------------- */
+    .field-optional {
+      font-size: 10px; font-weight: 500; text-transform: uppercase;
+      letter-spacing: 0.4px; color: var(--text-muted);
+    }
+    .account-state {
+      font-size: var(--text-sm); color: var(--text-secondary);
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 8px 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .account-state .dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+      background: var(--text-muted);
+    }
+    .account-state.on .dot { background: var(--up); box-shadow: 0 0 6px var(--up-glow); }
+    .account-state.off .dot { background: var(--degraded); box-shadow: 0 0 6px var(--degraded-glow); }
+    /* Live match indicator. Colour plus a glyph, so the state does not rest
+       on hue alone. */
+    .match-hint { font-size: var(--text-xs); display: flex; align-items: center; gap: 5px; }
+    .match-hint.ok { color: var(--up-fg); }
+    .match-hint.ok::before { content: '\2713'; }
+    .match-hint.bad { color: var(--down-fg); }
+    .match-hint.bad::before { content: '\2715'; }
+
     /* Card quick-action menu. The trigger lives in the card; the menu itself
        is a single shared node on <body> — .service-card sets
        `contain: layout style`, which traps position:fixed descendants. */
@@ -1827,6 +1852,56 @@
         <button class="drawer-close" id="settingsClose">✕</button>
       </div>
       <div class="drawer-body">
+        <!-- Account & Security -------------------------------------------
+             Changing credentials here writes to SQLite, not to the
+             environment, so it survives a container restart. The server
+             revokes every session on success and hands this tab a fresh one,
+             so other devices are signed out and this one is not. -->
+        <div id="accountSection">
+          <div class="section-label">Account &amp; Security</div>
+          <div class="account-state" id="accountState">
+            <span id="accountStateText">Checking\u2026</span>
+          </div>
+          <form id="accountForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;" autocomplete="off">
+            <div class="form-group" id="currentPasswordGroup">
+              <label class="form-label" for="acctCurrentPassword">Current password</label>
+              <div class="field-with-reveal">
+                <input type="password" class="form-input" id="acctCurrentPassword"
+                       autocomplete="current-password" placeholder="Required to make any change" />
+                <button type="button" class="field-reveal" data-reveal="acctCurrentPassword" aria-pressed="false" aria-label="Show current password" title="Show current password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="acctNewUsername">New username <span class="field-optional">optional</span></label>
+              <input type="text" class="form-input" id="acctNewUsername"
+                     autocomplete="username" autocapitalize="none" spellcheck="false"
+                     placeholder="Leave blank to keep the current one" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="acctNewPassword">New password <span class="field-optional" id="acctNewPasswordOptional">optional</span></label>
+              <div class="field-with-reveal">
+                <input type="password" class="form-input" id="acctNewPassword"
+                       autocomplete="new-password" placeholder="At least 8 characters" />
+                <button type="button" class="field-reveal" data-reveal="acctNewPassword" aria-pressed="false" aria-label="Show new password" title="Show new password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="acctConfirmPassword">Confirm new password</label>
+              <div class="field-with-reveal">
+                <input type="password" class="form-input" id="acctConfirmPassword"
+                       autocomplete="new-password" placeholder="Repeat the new password" />
+                <button type="button" class="field-reveal" data-reveal="acctConfirmPassword" aria-pressed="false" aria-label="Show confirmation" title="Show confirmation"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              </div>
+              <div class="match-hint" id="acctMatchHint" hidden></div>
+            </div>
+            <div class="login-error" id="acctError" hidden role="alert"></div>
+            <button type="submit" class="btn primary" id="acctSubmit" style="justify-content:center;">
+              <span class="btn-spinner" id="acctSpinner" hidden aria-hidden="true"></span>
+              <span id="acctSubmitLabel">Update Credentials</span>
+            </button>
+          </form>
+        </div>
+
         <!-- Admin API Token Section -->
         <div>
           <div class="section-label">Admin API Token</div>
@@ -2933,6 +3008,177 @@
       }
     }
 
+    // ---- Account & Security -------------------------------------------------
+
+    // Reflects the two states this form has to serve: first-time setup, where
+    // there is no current password to ask for, and an ordinary change.
+    function refreshAccountState() {
+      const box = document.getElementById('accountState');
+      const text = document.getElementById('accountStateText');
+      const curGroup = document.getElementById('currentPasswordGroup');
+      const newPassOptional = document.getElementById('acctNewPasswordOptional');
+      const submitLabel = document.getElementById('acctSubmitLabel');
+      if (!box || !text) return;
+
+      box.innerHTML = '<span class="dot"></span><span id="accountStateText"></span>';
+      const label = box.querySelector('#accountStateText');
+
+      if (authState.required) {
+        box.className = 'account-state on';
+        label.textContent = 'Sign-in is required. Signed in as ' + (authState.username || 'admin') + '.';
+        if (curGroup) curGroup.hidden = false;
+        if (newPassOptional) newPassOptional.hidden = false;
+        if (submitLabel) submitLabel.textContent = 'Update Credentials';
+      } else {
+        box.className = 'account-state off';
+        label.textContent = authState.tokenMode
+          ? 'No username or password set — the admin API token is in use. Set credentials to enable sign-in.'
+          : 'No credentials set. This dashboard is open to anyone who can reach it.';
+        // Nothing to verify against, so the current-password field would be a
+        // dead end. Hiding it is what makes turning auth on possible at all.
+        if (curGroup) curGroup.hidden = true;
+        if (newPassOptional) newPassOptional.hidden = true;
+        if (submitLabel) submitLabel.textContent = 'Enable Sign-in';
+      }
+      refreshPasswordMatch();
+    }
+
+    function refreshPasswordMatch() {
+      const pass = document.getElementById('acctNewPassword');
+      const confirm = document.getElementById('acctConfirmPassword');
+      const hint = document.getElementById('acctMatchHint');
+      if (!pass || !confirm || !hint) return true;
+
+      if (!pass.value && !confirm.value) {
+        hint.hidden = true;
+        hint.className = 'match-hint';
+        setFieldError(confirm, '');
+        return true;
+      }
+      const matches = pass.value === confirm.value;
+      hint.hidden = false;
+      hint.className = 'match-hint ' + (matches ? 'ok' : 'bad');
+      hint.textContent = matches ? 'Passwords match' : 'Passwords do not match';
+      return matches;
+    }
+
+    function setAccountError(msg) {
+      const box = document.getElementById('acctError');
+      if (!box) return;
+      box.textContent = msg || '';
+      box.hidden = !msg;
+    }
+
+    function resetAccountForm() {
+      ['acctCurrentPassword', 'acctNewUsername', 'acctNewPassword', 'acctConfirmPassword']
+        .forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { el.value = ''; setFieldError(el, ''); }
+        });
+      setAccountError('');
+      refreshPasswordMatch();
+    }
+
+    async function submitAccountUpdate(e) {
+      if (e) e.preventDefault();
+      const cur = document.getElementById('acctCurrentPassword');
+      const user = document.getElementById('acctNewUsername');
+      const pass = document.getElementById('acctNewPassword');
+      const confirm = document.getElementById('acctConfirmPassword');
+      const btn = document.getElementById('acctSubmit');
+      const spinner = document.getElementById('acctSpinner');
+      const label = document.getElementById('acctSubmitLabel');
+      const setup = !authState.required;
+
+      setAccountError('');
+      [cur, user, pass, confirm].forEach(el => setFieldError(el, ''));
+
+      // Validate before spending a round trip.
+      if (!setup && !cur.value) {
+        setFieldError(cur, 'Enter your current password to make a change.');
+        cur.focus();
+        return;
+      }
+      if (setup && !user.value.trim()) {
+        setFieldError(user, 'Choose a username.');
+        user.focus();
+        return;
+      }
+      if (setup && !pass.value) {
+        setFieldError(pass, 'Choose a password.');
+        pass.focus();
+        return;
+      }
+      if (!setup && !user.value.trim() && !pass.value) {
+        setAccountError('Enter a new username, a new password, or both.');
+        return;
+      }
+      if (pass.value && pass.value.length < 8) {
+        setFieldError(pass, 'Use at least 8 characters.');
+        pass.focus();
+        return;
+      }
+      if (pass.value && !refreshPasswordMatch()) {
+        setFieldError(confirm, 'Passwords do not match.');
+        confirm.focus();
+        return;
+      }
+
+      setButtonLoading(btn, spinner, true);
+      if (label) label.textContent = setup ? 'Enabling\u2026' : 'Updating\u2026';
+      try {
+        const res = await fetch('/api/auth/credentials', {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            current_password: cur.value,
+            new_username: user.value.trim(),
+            new_password: pass.value
+          })
+        });
+
+        if (res.status === 401) {
+          // The server rejected the current password. Inline on the field
+          // that caused it, not a toast that scrolls away.
+          let msg = 'Current password is incorrect';
+          try { const b = await res.json(); if (b && b.error) msg = b.error; } catch (err) { /* non-JSON */ }
+          setFieldError(cur, msg);
+          cur.focus();
+          cur.select();
+          return;
+        }
+        if (!res.ok) {
+          let msg = 'Could not update credentials.';
+          try { const b = await res.json(); if (b && b.error) msg = b.error; } catch (err) { /* non-JSON */ }
+          setAccountError(msg);
+          return;
+        }
+
+        const body = await res.json().catch(() => ({}));
+        resetAccountForm();
+        await fetchSession();
+        updateSessionChrome();
+        refreshAccountState();
+        if (body.reauth) {
+          // The server could not re-issue a session; sign in again.
+          showToast('Credentials updated — please sign in again', 'success');
+          showLoginGate();
+        } else {
+          showToast(setup
+            ? 'Sign-in enabled. Other devices must now sign in.'
+            : 'Credentials updated. Other devices have been signed out.', 'success');
+        }
+      } catch (err) {
+        setAccountError('Could not reach the server.');
+      } finally {
+        setButtonLoading(btn, spinner, false);
+        // Derived, not restored: a successful first-time setup flips the form
+        // into change mode, so the pre-request label is already stale here.
+        if (label) label.textContent = authState.required ? 'Update Credentials' : 'Enable Sign-in';
+      }
+    }
+
     async function signOut() {
       // Flip local state first: the socket's close handler consults
       // sessionGated(), so this has to be false before the socket goes down.
@@ -3055,6 +3301,14 @@
 
       const signOutBtn = document.getElementById('btnSignOut');
       if (signOutBtn) signOutBtn.addEventListener('click', signOut);
+
+      // ---- Account & Security ---------------------------------------------
+      const accountForm = document.getElementById('accountForm');
+      if (accountForm) accountForm.addEventListener('submit', submitAccountUpdate);
+      ['acctNewPassword', 'acctConfirmPassword'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', refreshPasswordMatch);
+      });
 
       // Reveal/hide, delegated so it covers the account fields added later
       // in the settings drawer as well as the two on the gate.
@@ -3602,6 +3856,10 @@
 
     function openSettings() {
       openDrawer('settingsDrawerOverlay');
+      // Re-read rather than trust a cached flag: credentials may have been
+      // changed from another tab since this drawer was last opened.
+      fetchSession().then(() => { updateSessionChrome(); refreshAccountState(); });
+      resetAccountForm();
       setTheme(localStorage.getItem('lantern_theme') || 'dark');
       setAccentColor(localStorage.getItem('lantern_accent') || null);
       const tokenInput = document.getElementById('adminTokenInput');
