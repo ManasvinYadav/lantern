@@ -89,28 +89,64 @@ To secure the write and administrative endpoints, set one of the following:
 | Variable | Description |
 |---|---|
 | `LANTERN_AUTH_TOKEN` | Admin bearer token. Passed via `Authorization: Bearer <TOKEN>`. Highly recommended for API clients pushing status. |
-| `LANTERN_AUTH_USER` | Basic auth username. Passed via standard HTTP Basic Auth. |
-| `LANTERN_AUTH_PASS` | Basic auth password. Used in conjunction with `LANTERN_AUTH_USER`. |
+| `LANTERN_AUTH_USER` | Admin username. Seeds the credential store on first boot; also accepted as HTTP Basic Auth. |
+| `LANTERN_AUTH_PASS` | Admin password. Used in conjunction with `LANTERN_AUTH_USER`. |
 
-Setting `LANTERN_AUTH_TOKEN` alone requires authentication on mutating and
-administrative routes specifically — `POST /api/status`, diagnostics,
-webhook config/test, group/maintenance/monitor writes, and every
+### Signing in
+
+Admin credentials live in the database, not in the environment. Set
+`LANTERN_AUTH_USER` and `LANTERN_AUTH_PASS` and Lantern hashes them with
+bcrypt into `admin_credentials` **on first boot only** — after that the stored
+row is authoritative, so a password you change in the dashboard is not
+reverted by a stale environment variable on the next restart. You can also
+skip the environment entirely and set credentials from **Settings → Account &
+Security**, which is how you turn sign-in on for a dashboard that is currently
+open.
+
+With credentials set, signing in issues an `HttpOnly`, `SameSite=Strict`
+session cookie. The cookie is what authenticates the `/ws` live feed: a
+browser's `WebSocket` constructor cannot send an `Authorization` header, so
+header-based auth alone leaves the dashboard falling back to polling. Failed
+logins are rate limited per client address.
+
+Change your username or password at **Settings → Account & Security**. The
+current password is required and verified; a wrong one returns `401`. A
+successful change revokes every session and issues a fresh one to the browser
+that made the change, so other devices are signed out and yours is not.
+
+### What each mode gates
+
+With **admin credentials set**, everything requires a session except the
+always-open surface below.
+
+With **`LANTERN_AUTH_TOKEN` alone**, only mutating and administrative routes
+require the token — `POST /api/status`, diagnostics, webhook config/test,
+group/maintenance/monitor writes, `DELETE /api/services/{name}`, and every
 `/api/services/{name}/docker/*` route (including its two `GET` endpoints,
 since they expose container internals and log content). General dashboard
-reads (`/api/services`, `/api/groups`, uptime/strip/incidents, webhook
-config `GET`) stay open. Setting `LANTERN_AUTH_USER`/`LANTERN_AUTH_PASS`
-(Basic Auth) instead gates the entire app except `/api/public/*`, `/api/health`,
-`/api/docs`, `/api/badge/*`, and `/metrics`, which are always open. The admin
-dashboard's Settings drawer has an "Admin API Token" field that stores your token in
-that browser and attaches it automatically to admin actions.
+reads stay open, and no login wall appears — there is no password to type.
 
-Per-service scoped tokens (issued into the `api_tokens` table) can push
-status and use Docker controls for their own service name only, and are
-rejected with `403` if used against a different service.
+With **nothing set**, Lantern is fully open. That is the out-of-the-box
+behavior and it is preserved deliberately: adding the login gate must not lock
+an existing deployment out of itself.
 
-*Note: `/api/public/*`, `/api/health`, `/api/docs`, `/api/badge/*`, and `/metrics` are
-always open, regardless of auth configuration. Status badges are intentionally
-anonymous so they render when embedded in a README.*
+Per-service scoped tokens (issued into the `api_tokens` table) can push status
+and use Docker controls for their own service name only, and are rejected with
+`403` if used against a different service. Both token types keep working under
+the login gate, so scripts, n8n and CI need no changes.
+
+### Always open
+
+`/status` and the static shell, `/api/public/*`, `/api/badge/*`, `/metrics`,
+`/api/health`, `/api/docs`, `GET /api/auth/session`, and `POST /api/auth/login`
+are reachable without any credential, regardless of configuration.
+
+The shell is served so the login form has somewhere to render; it carries no
+service data of its own, which all arrives over the gated `/api` routes. This
+is also what keeps `/status` public once you enable sign-in. `/api/health` is
+what the container `HEALTHCHECK` polls, with no credentials — gating it would
+mark the container unhealthy the moment auth was switched on. Status badges are
+intentionally anonymous so they render when embedded in a README.
 
 ## Observability
 

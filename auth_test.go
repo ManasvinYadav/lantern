@@ -156,6 +156,10 @@ func TestAuthExemptPathKeepsPublicSurfaceOpen(t *testing.T) {
 		{"/metrics", true, "Prometheus scrape"},
 		{"/api/auth/session", true, "shell asks whether to show the wall"},
 		{"/api/auth/login", true, "you cannot log in through the gate"},
+		// The container HEALTHCHECK wgets this with no credentials. Gating it
+		// marks the container unhealthy as soon as auth is switched on.
+		{"/api/health", true, "container healthcheck polls it"},
+		{"/api/docs", true, "documented as always open"},
 
 		{"/ws", false, "admin live feed is gated"},
 		{"/api/services", false, "service data is gated"},
@@ -180,7 +184,8 @@ func TestGatedServerStillServesStatusAndPublicAPI(t *testing.T) {
 	}
 	h := authMiddleware(db, cfg, okHandler())
 
-	open := []string{"/", "/status", "/api/public/services", "/api/badge/x.svg", "/metrics", "/api/auth/session"}
+	open := []string{"/", "/status", "/api/public/services", "/api/badge/x.svg", "/metrics",
+		"/api/auth/session", "/api/health", "/api/docs"}
 	for _, p := range open {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))

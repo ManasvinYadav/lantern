@@ -346,6 +346,13 @@ func authExemptPath(p string) bool {
 		return true
 	case p == "/metrics":
 		return true
+	// Always open and documented as such. /api/health in particular is what
+	// the container HEALTHCHECK polls with wget, which sends no credentials —
+	// gating it marks the container unhealthy the moment auth is switched on.
+	// Neither route exposes service data: health returns a status and version,
+	// docs is a static route reference.
+	case p == "/api/health", p == "/api/docs":
+		return true
 	case p == "/api/auth/session", p == "/api/auth/login":
 		return true
 	case p == "/ws":
