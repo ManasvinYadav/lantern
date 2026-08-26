@@ -74,6 +74,19 @@
       --unknown-bg: rgba(148, 163, 184, 0.12);
       --unknown-glow: rgba(148, 163, 184, 0.25);
 
+      /* Badge foregrounds. A status colour is used two ways: as a fill
+         (dot, card rule, heartbeat block) and as text sitting on its own
+         --*-bg tint. Those have different contrast requirements, so the
+         text case gets its own alias. Only DOWN actually has to diverge:
+         #f43f5e measures 4.21:1 on --down-bg, under the 4.5 floor for
+         11px text, so the badge uses rose-400 while the fill stays the
+         specified #f43f5e. */
+      --up-fg: var(--up);
+      --down-fg: #fb7185;
+      --degraded-fg: var(--degraded);
+      --maint-fg: var(--maint);
+      --unknown-fg: var(--unknown);
+
       --info: #3b82f6;
       --info-bg: rgba(59, 130, 246, 0.15);
 
@@ -170,17 +183,21 @@
       --down-bg: rgba(190, 18, 60, 0.12);
       --down-glow: rgba(190, 18, 60, 0.2);
 
-      --degraded: #b45309;
-      --degraded-bg: rgba(180, 83, 9, 0.12);
-      --degraded-glow: rgba(180, 83, 9, 0.2);
+      --degraded: #92400e;
+      --degraded-bg: rgba(146, 64, 14, 0.12);
+      --degraded-glow: rgba(146, 64, 14, 0.2);
 
       --maint: #475569;
       --maint-bg: rgba(71, 85, 105, 0.12);
       --maint-glow: rgba(71, 85, 105, 0.2);
 
-      --unknown: #64748b;
-      --unknown-bg: rgba(100, 116, 139, 0.12);
-      --unknown-glow: rgba(100, 116, 139, 0.2);
+      --unknown: #334155;
+      --unknown-bg: rgba(51, 65, 85, 0.12);
+      --unknown-glow: rgba(51, 65, 85, 0.2);
+
+      /* On a light ground the specified rose is already dark enough as
+         badge text, so the fill and the foreground realign. */
+      --down-fg: var(--down);
 
       --info: #1d4ed8;
       --info-bg: rgba(29, 78, 216, 0.12);
@@ -498,11 +515,11 @@
       padding: 2px 8px; border-radius: 4px;
       transition: background-color var(--duration-base) ease, color var(--duration-base) ease;
     }
-    .service-card.up .service-status-text { background: var(--up-bg); color: var(--up); }
-    .service-card.down .service-status-text { background: var(--down-bg); color: var(--down); }
-    .service-card.degraded .service-status-text { background: var(--degraded-bg); color: var(--degraded); }
-    .service-card.maintenance .service-status-text { background: var(--maint-bg); color: var(--maint); }
-    .service-card.unknown .service-status-text { background: var(--unknown-bg); color: var(--unknown); }
+    .service-card.up .service-status-text { background: var(--up-bg); color: var(--up-fg); }
+    .service-card.down .service-status-text { background: var(--down-bg); color: var(--down-fg); }
+    .service-card.degraded .service-status-text { background: var(--degraded-bg); color: var(--degraded-fg); }
+    .service-card.maintenance .service-status-text { background: var(--maint-bg); color: var(--maint-fg); }
+    .service-card.unknown .service-status-text { background: var(--unknown-bg); color: var(--unknown-fg); }
 
     .service-message { font-size: 13px; color: var(--text-secondary); min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .service-relative-ts {
