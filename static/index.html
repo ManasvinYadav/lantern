@@ -6,69 +6,197 @@
   <title>🔆 Lantern v0.59.1 — Service Dashboard</title>
   <style>
     
-    /* Themes */
-    :root[data-theme="midnight"] {
-      --bg: #000000;
-      --panel-bg: rgba(255,255,255,0.05);
-      --border: rgba(255,255,255,0.15);
+/* =====================================================================
+       Design tokens — surfaces, semantics, typography, motion.
+
+       Layering model:
+         --canvas     page ground
+         --surface-1  cards (opaque)
+         --surface-2  nested panels inside a card or drawer
+         --surface-3  drawers / modals / raised menus
+         --glass      tooltips, toasts & popovers — the only backdrop-filter
+                      consumers. Everything else is opaque.
+
+       Status colours are semantic and FIXED. The Settings accent picker
+       drives chrome only (--accent); it must never repaint --up/--down/
+       --degraded, or a user-chosen amber would make UP indistinguishable
+       from DEGRADED.
+
+       `--x` is the readable foreground for a status (badge text, dot, card
+       rule). `--beat-x` is the heartbeat-block fill, where a muted value is
+       wanted and legibility is not a concern.
+       ===================================================================== */
+    :root {
+      /* Surfaces — dark (default theme) */
+      --canvas: #0d1117;
+      --bg: var(--canvas);            /* legacy alias, still widely referenced */
+      --surface-1: #161b22;
+      --surface-2: #1a1f2c;
+      --surface-3: #21283b;
+      --glass: rgba(20, 24, 35, 0.9);
+      --panel-bg: var(--surface-1);   /* legacy alias */
+      --panel-hover: #1f2632;
+      --overlay: rgba(0, 0, 0, 0.85);
+
+      --border: rgba(255, 255, 255, 0.06);
+      --border-strong: #2e3648;
+      --border-focus: rgba(255, 255, 255, 0.2);
+
+      /* Text — ratios verified against --surface-1 by the contrast gate */
+      --text-primary: #f0f6fc;
+      --text-secondary: #b6c2cf;
+      --text-muted: #8b949e;
+
+      /* Accent — chrome only (focus rings, active states, branding) */
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --accent-bg: rgba(16, 185, 129, 0.1);
+      --on-accent: #ffffff;
+
+      /* Semantic status */
+      --up: #10b981;
+      --up-bg: rgba(16, 185, 129, 0.12);
+      --up-glow: rgba(16, 185, 129, 0.25);
+
+      --down: #f43f5e;
+      --down-bg: rgba(244, 63, 94, 0.12);
+      --down-glow: rgba(244, 63, 94, 0.25);
+
+      --degraded: #f59e0b;
+      --degraded-bg: rgba(245, 158, 11, 0.12);
+      --degraded-glow: rgba(245, 158, 11, 0.25);
+
+      --maint: #9ca3af;
+      --maint-bg: rgba(156, 163, 175, 0.12);
+      --maint-glow: rgba(156, 163, 175, 0.25);
+
+      --unknown: #94a3b8;
+      --unknown-bg: rgba(148, 163, 184, 0.12);
+      --unknown-glow: rgba(148, 163, 184, 0.25);
+
+      --info: #3b82f6;
+      --info-bg: rgba(59, 130, 246, 0.15);
+
+      /* Heartbeat block fills — a three-step neutral ramp sitting below the
+         vivid statuses: unknown > maintenance > empty. */
+      --beat-unknown: #64748b;
+      --beat-maint: #374151;
+      --beat-empty: #1f2937;
+
+      /* Popover inversion hook: the light theme flips these, so no
+         theme-specific patch rule is needed downstream. */
+      --tooltip-bg: var(--glass);
+      --tooltip-fg: var(--text-primary);
+      --tooltip-border: var(--border-strong);
+
+      --radius-sm: 6px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+
+      /* Spacing scale (4px base unit) */
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --space-10: 40px;
+
+      /* Type scale — matches sizes already in use across the app, now named */
+      --text-xs: 11px;
+      --text-sm: 12px;
+      --text-base: 13px;
+      --text-md: 14px;
+      --text-lg: 16px;
+      --text-xl: 18px;
+      --text-2xl: 24px;
+      --text-3xl: 32px;
+
+      /* Elevation scale — neutral shadows, independent of accent color */
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.15);
+      --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.2);
+      --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.35);
+      --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.45);
+      --shadow-raised: 0 12px 32px -4px rgba(0, 0, 0, 0.5);
+      --shadow-drawer: -10px 0 40px rgba(0, 0, 0, 0.5);
+
+      /* Motion */
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --duration-fast: 150ms;
+      --duration-base: 250ms;
+      --duration-slow: 400ms;
     }
+
+    /* Midnight — true-black ground. Surfaces stay translucent so the OLED
+       black reads through them, which is the entire point of this theme. */
+    :root[data-theme="midnight"] {
+      --canvas: #000000;
+      --surface-1: rgba(255, 255, 255, 0.045);
+      --surface-2: rgba(255, 255, 255, 0.07);
+      --surface-3: #0b0e14;
+      --glass: rgba(8, 10, 14, 0.88);
+      --panel-hover: rgba(255, 255, 255, 0.08);
+      --overlay: rgba(0, 0, 0, 0.9);
+      --border: rgba(255, 255, 255, 0.12);
+      --border-strong: rgba(255, 255, 255, 0.2);
+      --beat-empty: rgba(255, 255, 255, 0.07);
+    }
+
+    /* Light */
     :root[data-theme="light"] {
-      --bg: #f8fafc;
-      --panel-bg: #ffffff;
+      --canvas: #f8fafc;
+      --surface-1: #ffffff;
+      --surface-2: #f1f5f9;
+      --surface-3: #ffffff;
+      --glass: rgba(255, 255, 255, 0.9);
       --panel-hover: #f1f5f9;
+      --overlay: rgba(15, 23, 42, 0.45);
       --border: #e2e8f0;
-      --border-focus: #cbd5e1;
+      --border-strong: #cbd5e1;
+      --border-focus: #94a3b8;
+
       --text-primary: #0f172a;
       --text-secondary: #334155;
       --text-muted: #64748b;
 
-      --up: #059669;
-      --up-bg: rgba(5, 150, 105, 0.12);
-      --up-glow: rgba(5, 150, 105, 0.2);
+      --up: #047857;
+      --up-bg: rgba(4, 120, 87, 0.12);
+      --up-glow: rgba(4, 120, 87, 0.2);
 
-      --down: #e11d48;
-      --down-bg: rgba(225, 29, 72, 0.12);
-      --down-glow: rgba(225, 29, 72, 0.2);
+      --down: #be123c;
+      --down-bg: rgba(190, 18, 60, 0.12);
+      --down-glow: rgba(190, 18, 60, 0.2);
 
-      --degraded: #d97706;
-      --degraded-bg: rgba(217, 119, 6, 0.12);
-      --degraded-glow: rgba(217, 119, 6, 0.2);
+      --degraded: #b45309;
+      --degraded-bg: rgba(180, 83, 9, 0.12);
+      --degraded-glow: rgba(180, 83, 9, 0.2);
 
-      --maint: #7c3aed;
-      --maint-bg: rgba(124, 58, 237, 0.12);
-      --maint-glow: rgba(124, 58, 237, 0.2);
+      --maint: #475569;
+      --maint-bg: rgba(71, 85, 105, 0.12);
+      --maint-glow: rgba(71, 85, 105, 0.2);
 
       --unknown: #64748b;
       --unknown-bg: rgba(100, 116, 139, 0.12);
       --unknown-glow: rgba(100, 116, 139, 0.2);
-    }
 
-    :root[data-theme="light"] .drawer {
-      background: #ffffff;
-      box-shadow: -10px 0 40px rgba(0,0,0,0.15);
-    }
-    :root[data-theme="light"] .drawer-header {
-      background: #f8fafc;
-    }
-    :root[data-theme="light"] .svg-container {
-      background: #f8fafc;
-    }
-    :root[data-theme="light"] .diag-run-body {
-      background: #f8fafc;
-    }
-    :root[data-theme="light"] .diag-log-block {
-      color: #334155;
-    }
-    :root[data-theme="light"] .trend-block.empty {
-      background: #e2e8f0;
-    }
-    :root[data-theme="light"] td {
-      border-bottom: 1px solid var(--border);
-    }
-    :root[data-theme="light"] .graph-tooltip {
-      background: #0f172a;
-      color: #f8fafc;
-      border-color: #334155;
+      --info: #1d4ed8;
+      --info-bg: rgba(29, 78, 216, 0.12);
+
+      --beat-unknown: #94a3b8;
+      --beat-maint: #cbd5e1;
+      --beat-empty: #e2e8f0;
+
+      /* Deliberate inversion: a dark popover on a light page. */
+      --tooltip-bg: #0f172a;
+      --tooltip-fg: #f8fafc;
+      --tooltip-border: #334155;
+
+      --shadow-lg: 0 10px 40px rgba(15, 23, 42, 0.14);
+      --shadow-raised: 0 12px 32px -4px rgba(15, 23, 42, 0.16);
+      --shadow-drawer: -10px 0 40px rgba(15, 23, 42, 0.15);
     }
 
     /* List View */
@@ -102,82 +230,7 @@
     .services-grid.list-view .hide-public {
       margin-left: 10px;
     }
-/* =====================================================================
-       CSS Custom Properties & Reset
-       ===================================================================== */
-    :root {
-      --bg: #0a0d14;
-      --panel-bg: rgba(255, 255, 255, 0.03);
-      --panel-hover: rgba(255, 255, 255, 0.06);
-      --border: rgba(255, 255, 255, 0.08);
-      --border-focus: rgba(255, 255, 255, 0.2);
-      
-      --text-primary: #f8fafc;
-      --text-secondary: #94a3b8;
-      --text-muted: #475569;
 
-      --accent: #10b981;
-      --accent-glow: rgba(16, 185, 129, 0.25);
-      --accent-bg: rgba(16, 185, 129, 0.1);
-
-      --up: var(--accent);
-      --up-bg: var(--accent-bg);
-      --up-glow: var(--accent-glow);
-      
-      --down: #f43f5e;
-      --down-bg: rgba(244, 63, 94, 0.1);
-      --down-glow: rgba(244, 63, 94, 0.25);
-      
-      --degraded: #f59e0b;
-      --degraded-bg: rgba(245, 158, 11, 0.1);
-      --degraded-glow: rgba(245, 158, 11, 0.25);
-      
-      --maint: #8b5cf6;
-      --maint-bg: rgba(139, 92, 246, 0.1);
-      --maint-glow: rgba(139, 92, 246, 0.25);
-      
-      --unknown: #64748b;
-      --unknown-bg: rgba(100, 116, 139, 0.1);
-      --unknown-glow: rgba(100, 116, 139, 0.25);
-
-      --radius-sm: 6px;
-      --radius-md: 12px;
-      --radius-lg: 16px;
-      --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-
-      /* Spacing scale (4px base unit) */
-      --space-1: 4px;
-      --space-2: 8px;
-      --space-3: 12px;
-      --space-4: 16px;
-      --space-5: 20px;
-      --space-6: 24px;
-      --space-8: 32px;
-      --space-10: 40px;
-
-      /* Type scale — matches sizes already in use across the app, now named */
-      --text-xs: 11px;
-      --text-sm: 12px;
-      --text-base: 13px;
-      --text-md: 14px;
-      --text-lg: 16px;
-      --text-xl: 18px;
-      --text-2xl: 24px;
-      --text-3xl: 32px;
-
-      /* Elevation scale — neutral shadows, independent of accent color */
-      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.15);
-      --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.2);
-      --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.35);
-      --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.45);
-
-      /* Motion */
-      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-      --duration-fast: 150ms;
-      --duration-base: 250ms;
-      --duration-slow: 400ms;
-    }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
@@ -200,7 +253,7 @@
       overflow-x: hidden;
     }
 
-    ::selection { background: var(--accent); color: #ffffff; }
+    ::selection { background: var(--accent); color: var(--on-accent); }
     a { color: inherit; text-decoration: none; transition: color 0.2s; }
     a:hover { color: var(--accent); }
     
@@ -256,7 +309,7 @@
     .btn.primary {
       background: var(--accent) !important;
       border-color: var(--accent) !important;
-      color: #ffffff !important;
+      color: var(--on-accent) !important;
     }
     .btn.primary:hover {
       filter: brightness(1.1);
@@ -354,7 +407,7 @@
     .filter-pill:hover { background: var(--panel-hover); color: var(--text-primary); border-color: var(--accent); }
     .filter-pill.active {
       background: var(--accent) !important;
-      color: #ffffff !important;
+      color: var(--on-accent) !important;
       border-color: var(--accent) !important;
       box-shadow: 0 0 12px var(--accent-glow) !important;
     }
@@ -462,9 +515,9 @@
     .trend-block.up { background: var(--up); }
     .trend-block.down { background: var(--down); }
     .trend-block.degraded { background: var(--degraded); }
-    .trend-block.maintenance { background: var(--maint); }
-    .trend-block.unknown { background: var(--unknown); }
-    .trend-block.empty { background: var(--panel-hover); }
+    .trend-block.maintenance { background: var(--beat-maint); }
+    .trend-block.unknown { background: var(--beat-unknown); }
+    .trend-block.empty { background: var(--beat-empty); }
 
     /* New beat sliding into a live heartbeat bar (see applyLiveHeartbeat). */
     @keyframes beat-pulse {
@@ -480,7 +533,7 @@
        Drawers (Service Detail & Diagnostics)
        ===================================================================== */
     .drawer-overlay {
-      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); 
+      position: fixed; inset: 0; background: var(--overlay);
       z-index: 1000; display: flex; justify-content: flex-end;
       opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
       backdrop-filter: blur(4px);
@@ -489,12 +542,12 @@
 
     .drawer {
       width: 600px; max-width: 100vw; height: 100vh;
-      background: rgba(17, 24, 39, 0.96); 
+      background: var(--surface-3);
       border-left: 1px solid var(--border);
       display: flex; flex-direction: column;
       transform: translate3d(100%, 0, 0); 
       transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
-      box-shadow: -10px 0 40px rgba(0,0,0,0.5);
+      box-shadow: var(--shadow-drawer);
       will-change: transform;
       backface-visibility: hidden;
     }
@@ -505,7 +558,7 @@
     .drawer-header {
       padding: 24px; border-bottom: 1px solid var(--border);
       display: flex; justify-content: space-between; align-items: center;
-      background: rgba(255,255,255,0.02);
+      background: var(--surface-2);
     }
     .drawer-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 12px; }
     .drawer-close { background: transparent; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer; padding: 4px; }
@@ -532,7 +585,7 @@
     .diag-run-service { background: var(--accent-glow); color: var(--accent); font-weight: 500; }
     
     .diag-run-body {
-      display: none; border-top: 1px solid var(--border); padding: 16px; background: rgba(0,0,0,0.2);
+      display: none; border-top: 1px solid var(--border); padding: 16px; background: var(--surface-2);
       position: relative;
     }
     .diag-run-card.open { border-color: var(--accent); }
@@ -546,7 +599,7 @@
     .diag-copy-btn:hover { background: var(--panel-hover); border-color: var(--accent); color: var(--accent); }
     
     .diag-log-block {
-      font-family: var(--font-mono); font-size: 12px; color: #a1a1aa; white-space: pre-wrap;
+      font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: pre-wrap;
       word-break: break-word; max-height: 400px; overflow-y: auto; line-height: 1.6;
       margin-top: 24px;
     }
@@ -582,22 +635,22 @@
     }
     .uptime-range-btn.active {
       background: var(--accent) !important;
-      color: #ffffff !important;
+      color: var(--on-accent) !important;
       font-weight: 600;
       box-shadow: 0 0 8px var(--accent-glow);
     }
     :root[data-theme="light"] .uptime-range-btn.active {
       background: var(--accent) !important;
-      color: #ffffff !important;
+      color: var(--on-accent) !important;
     }
 
-    .svg-container { position: relative; width: 100%; height: 180px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
+    .svg-container { position: relative; width: 100%; height: 180px; background: var(--surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; }
     .svg-container svg { width: 100%; height: 100%; }
-    .graph-tooltip { position: absolute; background: #111827; border: 1px solid var(--border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--text-primary); border-radius: 4px; z-index: 10;  white-space: pre;}
+    .graph-tooltip { position: absolute; background: var(--tooltip-bg); border: 1px solid var(--tooltip-border); padding: 6px 10px; font-size: 11px; font-family: var(--font-mono); pointer-events: none; opacity: 0; transition: opacity 0.2s; color: var(--tooltip-fg); border-radius: 4px; z-index: 10;  white-space: pre;}
 
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th { text-align: left; padding: 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
-    td { padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary); }
+    td { padding: 12px 10px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
     tr:last-child td { border-bottom: none; }
     .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
@@ -610,7 +663,7 @@
     [data-tooltip] { position: relative; cursor: help; }
     [data-tooltip]:hover::after {
       content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-      background: #111827; border: 1px solid var(--border); color: var(--text-primary);
+      background: var(--tooltip-bg); border: 1px solid var(--tooltip-border); color: var(--tooltip-fg);
       padding: 6px 10px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10; margin-bottom: 6px;
        font-family: var(--font-sans); font-weight: 400;
     }
@@ -657,8 +710,8 @@
       box-shadow: 0 0 10px var(--accent-glow);
     }
     :root[data-theme="light"] .theme-btn.active {
-      background: #e2e8f0;
-      border-color: var(--accent, #94a3b8);
+      background: var(--border);
+      border-color: var(--accent, var(--border-focus));
       color: var(--text-primary);
     }
 
@@ -692,12 +745,12 @@
       font-family: var(--font-mono);
     }
     .badge-source.db {
-      background: rgba(16, 185, 129, 0.15);
+      background: var(--up-bg);
       color: var(--up);
     }
     .badge-source.env {
-      background: rgba(59, 130, 246, 0.15);
-      color: #3b82f6;
+      background: var(--info-bg);
+      color: var(--info);
     }
     .badge-source.none {
       background: var(--panel-hover);
@@ -783,7 +836,7 @@
     }
     .toast {
       pointer-events: auto;
-      background: rgba(17, 24, 39, 0.95);
+      background: var(--glass);
       backdrop-filter: blur(12px);
       border: 1px solid var(--border);
       color: var(--text-primary);
@@ -794,7 +847,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      box-shadow: var(--shadow-raised);
       transform: translateY(20px);
       opacity: 0;
       transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -806,11 +859,7 @@
     .toast.success { border-left: 3px solid var(--accent); }
     .toast.error { border-left: 3px solid var(--down); }
     .toast.warning { border-left: 3px solid var(--degraded); }
-    .toast.info { border-left: 3px solid #3b82f6; }
-    :root[data-theme="light"] .toast {
-      background: #ffffff;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
-    }
+    .toast.info { border-left: 3px solid var(--info); }
 
     /* Skeletons & Empty State */
     .skeleton-card {
@@ -825,12 +874,9 @@
       overflow: hidden;
     }
     .skeleton-box {
-      background: rgba(255,255,255,0.05);
+      background: var(--panel-hover);
       border-radius: 4px;
       animation: shimmer 1.5s infinite;
-    }
-    :root[data-theme="light"] .skeleton-box {
-      background: rgba(0,0,0,0.06);
     }
     @keyframes shimmer {
       0% { opacity: 0.3; }
@@ -859,12 +905,9 @@
       flex-direction: column;
       gap: 2px;
       padding: 8px 10px;
-      background: rgba(0,0,0,0.2);
+      background: var(--surface-2);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-    }
-    :root[data-theme="light"] .meta-item {
-      background: #f8fafc;
     }
     .meta-label {
       font-size: 10px;
@@ -1093,7 +1136,7 @@
                 <button class="btn" id="btnCopyDockerLogs" style="padding:2px 6px; font-size:11px;">Copy</button>
               </div>
             </div>
-            <pre id="sdDockerLogsPre" style="font-family:var(--font-mono); font-size:11px; color:#94a3b8; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; max-height:260px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></pre>
+            <pre id="sdDockerLogsPre" style="font-family:var(--font-mono); font-size:11px; color:var(--text-secondary); background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; max-height:260px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;"></pre>
           </div>
         </div>
 
@@ -1259,7 +1302,7 @@
             </select>
             <button type="button" class="btn" id="btnTestWebhook" style="white-space:nowrap;">Send Test</button>
           </div>
-          <div id="webhookTestResult" style="font-size:12px; color:var(--text-secondary); white-space:pre-wrap; max-height:140px; overflow-y:auto; font-family:var(--font-mono); margin-top:10px; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; min-height:36px;"></div>
+          <div id="webhookTestResult" style="font-size:12px; color:var(--text-secondary); white-space:pre-wrap; max-height:140px; overflow-y:auto; font-family:var(--font-mono); margin-top:10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; min-height:36px;"></div>
         </div>
 
         <!-- Recent Delivery Log Section -->
@@ -1268,7 +1311,7 @@
             <div class="section-label">Recent Delivery Log</div>
             <button type="button" class="btn" id="btnRefreshDeliveries" style="font-size:11px; padding:4px 10px;">Refresh</button>
           </div>
-          <div id="webhookDeliveryLog" style="font-size:12px; font-family:var(--font-mono); margin-top:8px; max-height:180px; overflow-y:auto; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
+          <div id="webhookDeliveryLog" style="font-size:12px; font-family:var(--font-mono); margin-top:8px; max-height:180px; overflow-y:auto; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
             <span style="color:var(--text-muted);">No deliveries yet.</span>
           </div>
         </div>
@@ -2151,7 +2194,7 @@
             certLine = `<div style="color:${certColor}; font-size:11px; margin-top:2px;">${certIcon}TLS cert expires ${expiryDate} (${m.cert_days_remaining}d)</div>`;
           }
           return `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:rgba(0,0,0,0.15); border:1px solid ${m.cert_warning ? 'var(--down)' : 'var(--border)'}; border-radius:var(--radius-sm);">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:var(--surface-2); border:1px solid ${m.cert_warning ? 'var(--down)' : 'var(--border)'}; border-radius:var(--radius-sm);">
               <div>
                 <strong>${escapeHtml(m.service_name)}</strong>${stateLabel}
                 <div style="color:var(--text-muted); font-size:11px;">${info.icon} ${info.label} → ${escapeHtml(m.target)} · every ${m.interval_seconds}s · last checked ${lastChecked}</div>
@@ -2798,7 +2841,7 @@
         fetch(API.incidents(name)).then(r=>r.json()).then(d => {
           const list = document.getElementById('sdIncidents');
           if(!d.incidents || d.incidents.length === 0) {
-            list.innerHTML = '<div style="color:var(--text-muted);font-size:13px; background: rgba(255,255,255,0.02); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">No incidents in the last 30 days.</div>';
+            list.innerHTML = '<div style="color:var(--text-muted);font-size:13px; background: var(--surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">No incidents in the last 30 days.</div>';
             return;
           }
           list.innerHTML = d.incidents.map(inc => `
