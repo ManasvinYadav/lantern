@@ -2011,21 +2011,27 @@
       } catch (e) { return false; }
     }
 
-    // Target shape follows whatever probe the backend will actually run
-    // (see runCheck in monitors.go).
+    // Mirrors validateMonitorTarget() in monitors.go. It must never reject
+    // something the server would accept, or the form blocks a valid config:
+    // the Go side uses net.SplitHostPort for tcp (which takes bracketed IPv6)
+    // and accepts any non-empty host for ping.
     function validateMonitorTarget(type, target) {
       if (!target) return 'Target is required';
       if (type === 'http') {
         return isHttpUrl(target) ? '' : 'Must be a full http:// or https:// URL';
       }
       if (type === 'tcp') {
-        const m = target.match(/^([A-Za-z0-9._-]+):(\d{1,5})$/);
-        if (!m) return 'Use host:port, e.g. db.local:5432';
-        const port = parseInt(m[2], 10);
+        // host:port, or [ipv6]:port to match net.SplitHostPort.
+        const m = target.match(/^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):(\d{1,5})$/);
+        if (!m) return 'Use host:port, e.g. db.local:5432 or [::1]:5432';
+        const port = parseInt(m[1], 10);
         return (port >= 1 && port <= 65535) ? '' : 'Port must be between 1 and 65535';
       }
-      return /^[A-Za-z0-9._-]+$/.test(target)
-        ? '' : 'Use a bare hostname or IP, with no scheme or port';
+      // ping: the server accepts any non-empty host and resolves it at check
+      // time, so only reject what clearly is not a host.
+      if (/\s/.test(target)) return 'Hostname cannot contain spaces';
+      if (target.includes('://')) return 'Use a bare hostname or IP, with no scheme';
+      return '';
     }
 
     function monitorFormErrors() {
