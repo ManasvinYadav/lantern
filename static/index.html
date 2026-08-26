@@ -220,9 +220,11 @@
       width: 20%;
     }
     .services-grid.list-view .trend-container {
-      width: 35%; align-self: flex-end;
+      width: 35%; align-self: center;
       margin-top: 0;
-      height: 40px;
+      /* Was a hard 40px, which the 26px bar plus its header and gap now
+         overflow. Let it size to its content instead. */
+      height: auto;
     }
     .services-grid.list-view .service-card::after {
       display: none;
@@ -388,7 +390,7 @@
     }
 
     .metric-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
-    .metric-value { font-size: 32px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; }
+    .metric-value { font-size: 32px; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
     .metric-sub { font-size: 14px; font-weight: 400; color: var(--text-muted); }
 
     /* =====================================================================
@@ -426,10 +428,14 @@
       
       contain: layout style;
       content-visibility: auto;
-      contain-intrinsic-size: 0 160px;
+      /* Placeholder height for off-screen cards. Must track the real
+         rendered height or scrolling jumps; the taller 26px heartbeat
+         bar pushed this up from the old (already low) 160px. */
+      contain-intrinsic-size: 0 210px;
+      /* translateZ(0) already promotes this to its own layer, so a
+         will-change on top of it was redundant compositor hinting. */
       transform: translateZ(0);
       backface-visibility: hidden;
-      will-change: transform, border-color, box-shadow;
       transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease, box-shadow 0.2s ease;
       display: flex;
       flex-direction: column;
@@ -459,7 +465,7 @@
 
     .service-header { display: flex; justify-content: space-between; align-items: flex-start; }
     .service-name-group { display: flex; align-items: center; gap: 12px; }
-    .service-name { font-size: 16px; font-weight: 600; color: var(--text-primary); word-break: break-all; }
+    .service-name { font-size: 16px; font-weight: 600; color: var(--text-primary); min-width: 0; }
     
     /* Pulsating Status Badge */
     .status-dot {
@@ -499,25 +505,60 @@
     .service-card.unknown .service-status-text { background: var(--unknown-bg); color: var(--unknown); }
 
     .service-message { font-size: 13px; color: var(--text-secondary); min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-    /* Secondary information: kept legible but visually quieter than the
-       primary status/name/last-seen row above it. */
-    .trend-container { display: flex; flex-direction: column; gap: 6px; opacity: 0.92; }
-    .trend-header { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
-    .trend-bar { display: flex; gap: 2px; height: 22px; align-items: flex-end; }
-    .trend-block {
-      flex: 1; min-width: 0; background: var(--panel-hover); border-radius: 2px;
-      transition: height 0.25s ease, background 0.25s ease; height: 100%;
-      cursor: crosshair;
+    .service-relative-ts {
+      font-size: var(--text-sm); font-weight: 500; color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
     }
-    .trend-block:hover { filter: brightness(1.2); }
+    /* Long service names truncate rather than wrapping the header onto a
+       second line and changing the card's height. */
+    .service-title-wrap { min-width: 0; }
+    .service-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Secondary information: quieter than the primary status/name row above
+       it, but via muted *tokens* rather than a blanket opacity — dimming the
+       whole container also dimmed the uptime figure, which is a headline
+       number, not a label. */
+    .trend-container { display: flex; flex-direction: column; gap: var(--space-2); }
+    .trend-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: var(--text-xs); color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600;
+    }
+    .uptime-pct-label {
+      font-variant-numeric: tabular-nums;
+      font-size: var(--text-sm); font-weight: 600; letter-spacing: 0;
+      color: var(--text-secondary); text-transform: none;
+    }
+
+    /* Pills are fluid within a fixed 6-8px band: 30 beats at a hard 8px plus
+       3px gaps need 327px, but the narrowest grid column leaves only 300px of
+       card interior. Growing between the bounds keeps the proportions on wide
+       cards without ever overflowing a narrow one. space-between keeps the
+       gaps uniform once the blocks hit their 8px cap. */
+    .trend-bar {
+      display: flex; gap: 3px; height: 26px;
+      align-items: stretch; justify-content: space-between;
+    }
+    .trend-block {
+      flex: 1 1 0; min-width: 6px; max-width: 8px; height: 100%;
+      background: var(--beat-empty); border-radius: 4px;
+      cursor: crosshair;
+      /* Compositor-only. The old rule transitioned `height`, which is a
+         layout property and forced a reflow of the whole bar on every beat. */
+      transition: transform var(--duration-fast) var(--ease-out),
+                  filter var(--duration-fast) var(--ease-out);
+    }
+    .trend-block:hover { transform: translateY(-2px); filter: brightness(1.25); }
     
     .trend-block.up { background: var(--up); }
     .trend-block.down { background: var(--down); }
     .trend-block.degraded { background: var(--degraded); }
     .trend-block.maintenance { background: var(--beat-maint); }
     .trend-block.unknown { background: var(--beat-unknown); }
-    .trend-block.empty { background: var(--beat-empty); }
+    .trend-block.empty {
+      background: var(--beat-empty);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
 
     /* New beat sliding into a live heartbeat bar (see applyLiveHeartbeat). */
     @keyframes beat-pulse {
@@ -581,7 +622,7 @@
     }
     .diag-run-info { display: flex; flex-direction: column; gap: 4px; }
     .diag-run-title { font-size: 14px; font-weight: 500; color: var(--text-primary); }
-    .diag-run-meta { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+    .diag-run-meta { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .diag-run-service { background: var(--accent-glow); color: var(--accent); font-weight: 500; }
     
     .diag-run-body {
@@ -652,7 +693,7 @@
     th { text-align: left; padding: 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
     td { padding: 12px 10px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
     tr:last-child td { border-bottom: none; }
-    .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+    .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
     .maint-toggle-wrap { display: flex; align-items: center; justify-content: space-between; background: var(--panel-bg); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 
@@ -2573,7 +2614,7 @@
         <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
         ${trendHTML}
         <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-           <span class="service-relative-ts" style="font-size:12px; font-weight:500; color:var(--text-secondary)">${relativeTime(s.timestamp)}</span>
+           <span class="service-relative-ts">${relativeTime(s.timestamp)}</span>
            <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
         </div>
       `;
