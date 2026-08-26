@@ -747,7 +747,11 @@ type apiDocSection struct {
 // not generated from a separate spec that can drift.
 var apiDocSections = []apiDocSection{
 	{"Authentication", []apiDocRoute{
-		{"—", "—", "Bearer token: Authorization: Bearer <LANTERN_AUTH_TOKEN> (admin) or a per-service token from api_tokens (scoped). Basic Auth: LANTERN_AUTH_USER/LANTERN_AUTH_PASS. Required only on mutating/admin routes once either is configured — see docs/CONFIG.md.", ""},
+		{"—", "—", "Session cookie (browser): sign in at the dashboard; the cookie also authenticates the /ws live feed, which cannot carry a header. Bearer token: Authorization: Bearer <LANTERN_AUTH_TOKEN> (admin) or a per-service token from api_tokens (scoped). Basic Auth: the stored admin credentials, seeded once from LANTERN_AUTH_USER/LANTERN_AUTH_PASS. With admin credentials set, everything outside /status, /api/public/*, /api/badge/* and /metrics requires one of these; with none set, Lantern stays open — see docs/CONFIG.md.", ""},
+		{"GET", "/api/auth/session", "Whether auth is on and who you are. Always open.", "curl http://localhost:7654/api/auth/session"},
+		{"POST", "/api/auth/login", "Exchange username/password for a session cookie. Rate limited per client address.", `curl -X POST /api/auth/login -d '{"username":"admin","password":"..."}'`},
+		{"POST", "/api/auth/logout", "Revoke the current session.", "curl -X POST /api/auth/logout"},
+		{"PUT", "/api/auth/credentials", "Change the admin username and/or password. Verifies current_password, then revokes every session and re-issues one to the caller. 401 if current_password is wrong.", `curl -X PUT /api/auth/credentials -d '{"current_password":"...","new_username":"...","new_password":"..."}'`},
 	}},
 	{"Health & Meta", []apiDocRoute{
 		{"GET", "/api/health", "Service health and version, always open.", ""},

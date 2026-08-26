@@ -1,7 +1,9 @@
 # Stage 1: Build
-# golang:1.22-alpine is sufficient — no C toolchain needed.
+# golang:1.25-alpine matches the go directive in go.mod (raised when
+# golang.org/x/crypto was added for bcrypt password hashing).
+# It is sufficient — no C toolchain needed.
 # modernc.org/sqlite is a pure-Go SQLite implementation (no CGO).
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./

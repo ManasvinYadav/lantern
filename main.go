@@ -16,7 +16,6 @@ import (
 
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/csv"
 	"fmt"
 	"html"
@@ -255,6 +254,9 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 	// "duplicate column name" no-op.
 	_, _ = db.Exec("ALTER TABLE status_events ADD COLUMN latency_ms INTEGER DEFAULT 0;")
 
+	// Admin credentials, sessions, and the env bootstrap (see auth.go).
+	initAuth(db, cfg)
+
 	// Run an initial cleanup so stale rows are gone immediately on startup.
 	cleanupRetention(db, cfg)
 
@@ -281,6 +283,9 @@ func cleanupRetention(db *sql.DB, cfg *Config) {
 			log.Printf("retention cleanup error: %v", err)
 		}
 	}
+	// Sessions expire on their own 30-day TTL rather than RetentionDays, but
+	// they ride the same janitor so there is only one scheduled sweep.
+	purgeExpiredSessions(db)
 }
 
 // runRetentionCleanup runs cleanupRetention every hour in the background.
@@ -345,55 +350,6 @@ func isProtectedEndpoint(r *http.Request) bool {
 		return true
 	}
 	return false
-}
-
-// authMiddleware enforces HTTP Basic Auth or Bearer tokens.
-func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/public/") || strings.HasPrefix(r.URL.Path, "/api/badge/") || r.URL.Path == "/metrics" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-
-			if cfg.AuthToken != "" && token == cfg.AuthToken {
-				ctx := context.WithValue(r.Context(), isAdminKey, true)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			var serviceName string
-			err := db.QueryRow("SELECT service_name FROM api_tokens WHERE token = ?", token).Scan(&serviceName)
-			if err == nil {
-				ctx := context.WithValue(r.Context(), scopedServiceKey, serviceName)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-		}
-
-		if cfg.AuthEnabled {
-			user, pass, ok := r.BasicAuth()
-			if !ok || user != cfg.AuthUser || pass != cfg.AuthPass {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Lantern"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			ctx := context.WithValue(r.Context(), isAdminKey, true)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
-		if cfg.AuthToken != "" && isProtectedEndpoint(r) {
-			w.Header().Set("WWW-Authenticate", `Bearer`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
 
 // jsonMiddleware sets the Content-Type header to application/json.
@@ -2079,6 +2035,15 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	r.Handle("/api/badge/{service}.svg", handleBadge(db)).Methods(http.MethodGet, http.MethodHead)
 
 	// --- API routes ---
+	// --- Auth: session, login, logout, credential management ---
+	// /session and /login are exempt from the gate (see authExemptPath) so the
+	// shell can discover whether to show the wall and then get through it.
+	loginLimiter := newLoginThrottle()
+	r.Handle("/api/auth/session", handleGetAuthSession(db, cfg)).Methods(http.MethodGet)
+	r.Handle("/api/auth/login", handlePostLogin(db, loginLimiter)).Methods(http.MethodPost)
+	r.Handle("/api/auth/logout", handlePostLogout(db)).Methods(http.MethodPost)
+	r.Handle("/api/auth/credentials", handlePutCredentials(db)).Methods(http.MethodPut)
+
 	api := r.PathPrefix("/api").Subrouter()
 	api.Use(jsonMiddleware)
 
