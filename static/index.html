@@ -409,6 +409,80 @@
     /* =====================================================================
        Metrics Tiles
        ===================================================================== */
+    /* =====================================================================
+       Global status banner
+
+       The headline answer to "is anything broken right now", above the
+       numeric cards. The ambient glow animates opacity and transform on a
+       pseudo-element rather than box-shadow spread, which would repaint the
+       banner every frame.
+       ===================================================================== */
+    .status-banner {
+      display: flex; align-items: center; gap: var(--space-4);
+      flex-wrap: wrap;
+      padding: var(--space-4) var(--space-5);
+      margin-bottom: var(--space-5);
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--banner-accent, var(--unknown));
+      border-radius: var(--radius-md);
+      transition: border-color var(--duration-base) var(--ease-out);
+    }
+    .status-banner.ok       { --banner-accent: var(--up);       --banner-glow: var(--up-glow); }
+    .status-banner.degraded { --banner-accent: var(--degraded); --banner-glow: var(--degraded-glow); }
+    .status-banner.outage   { --banner-accent: var(--down);     --banner-glow: var(--down-glow); }
+
+    .status-banner-dot {
+      position: relative; flex-shrink: 0;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--banner-accent, var(--unknown));
+    }
+    .status-banner-dot::after {
+      content: ''; position: absolute; inset: -8px;
+      border-radius: 50%; pointer-events: none;
+      background: radial-gradient(circle, var(--banner-glow, transparent) 0%, transparent 70%);
+      animation: ambient-glow 3s ease-in-out infinite;
+      will-change: transform, opacity;
+    }
+    @keyframes ambient-glow {
+      0%, 100% { opacity: 0.4; transform: scale(0.85); }
+      50%      { opacity: 1;   transform: scale(1.2); }
+    }
+
+    .status-banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .status-banner-title {
+      font-size: var(--text-lg); font-weight: 600; color: var(--text-primary);
+      line-height: 1.2;
+    }
+    .status-banner-sub { font-size: var(--text-sm); color: var(--text-muted); }
+
+    /* Metric pill ticker. Tabular numerals so the figures don't shift the
+       pills sideways as they update. */
+    .status-banner-pills {
+      display: flex; align-items: center; gap: var(--space-2);
+      flex-wrap: wrap; margin-left: auto;
+    }
+    .metric-pill {
+      display: flex; align-items: baseline; gap: 6px;
+      padding: 5px 11px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .metric-pill-label {
+      font-size: var(--text-xs); color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+    }
+    .metric-pill-value {
+      font-family: var(--font-mono); font-size: var(--text-base); font-weight: 600;
+      color: var(--text-primary); font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 640px) {
+      .status-banner-pills { margin-left: 0; width: 100%; }
+    }
+
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1372,6 +1446,24 @@
       <button type="button" class="btn" id="btnBannerRetry" style="font-size:11px; padding:3px 10px;">Retry now</button>
     </div>
 
+    <div class="status-banner" id="statusBanner" role="status" aria-live="polite">
+      <div class="status-banner-dot"></div>
+      <div class="status-banner-text">
+        <div class="status-banner-title" id="metricStatus">Analyzing&hellip;</div>
+        <div class="status-banner-sub" id="metricStatusSub">Fetching latest service data</div>
+      </div>
+      <div class="status-banner-pills">
+        <div class="metric-pill" title="Mean uptime across all services over the last 7 days">
+          <span class="metric-pill-label">Uptime</span>
+          <span class="metric-pill-value" id="pillUptime">--%</span>
+        </div>
+        <div class="metric-pill" title="Mean check latency across the last 30 checks of every service">
+          <span class="metric-pill-label">Latency</span>
+          <span class="metric-pill-value" id="pillLatency">--</span>
+        </div>
+      </div>
+    </div>
+
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-title">Overall Uptime</div>
@@ -1384,9 +1476,9 @@
         <div class="metric-sub">Services currently down or degraded</div>
       </div>
       <div class="metric-card">
-        <div class="metric-title">System Status</div>
-        <div class="metric-value" id="metricStatus" style="font-size: 24px;">Analyzing...</div>
-        <div class="metric-sub" id="metricStatusSub">Fetching latest service data</div>
+        <div class="metric-title">Avg Response</div>
+        <div class="metric-value" id="metricLatency">--</div>
+        <div class="metric-sub" id="metricLatencySub">Across the last 30 checks per service</div>
       </div>
     </div>
 
@@ -3276,13 +3368,33 @@
       sel.value = current;
     }
 
+    // Mean check latency across every service's heartbeat window. This is a
+    // rolling average over the last 30 checks each, not an all-time mean --
+    // the UI labels it as such so the number isn't misread.
+    function globalLatencyStats(services) {
+      let total = 0, samples = 0;
+      (services || []).forEach(s => {
+        (s.history || []).forEach(b => {
+          // Padding beats carry no measurement and would drag the mean to zero.
+          if (!b || b.status === 'empty') return;
+          if (typeof b.latency_ms !== 'number') return;
+          total += b.latency_ms;
+          samples++;
+        });
+      });
+      return { avg: samples ? Math.round(total / samples) : null, samples: samples };
+    }
+
     function updateMetrics() {
-      let upCount = 0;
+      let downCount = 0;
+      let degradedCount = 0;
       let totalUptime7d = 0;
       let countUptime7d = 0;
       let activeIncidents = 0;
 
       state.services.forEach(s => {
+        if (s.status === 'down') downCount++;
+        if (s.status === 'degraded') degradedCount++;
         if (s.status === 'down' || s.status === 'degraded') activeIncidents++;
         if (s.uptime_7d !== undefined && s.uptime_7d !== null) {
           totalUptime7d += s.uptime_7d;
@@ -3295,6 +3407,29 @@
       if (upEl) upEl.innerText = `${avgUptime}%`;
       const incEl = document.getElementById('metricIncidents');
       if (incEl) incEl.innerText = activeIncidents;
+
+      const lat = globalLatencyStats(state.services);
+      const latText = lat.avg === null ? '--' : `${lat.avg} ms`;
+      const latEl = document.getElementById('metricLatency');
+      if (latEl) latEl.innerText = latText;
+      const latSubEl = document.getElementById('metricLatencySub');
+      if (latSubEl) {
+        latSubEl.innerText = lat.samples
+          ? `Mean of ${lat.samples.toLocaleString()} recent checks`
+          : 'No latency recorded yet';
+      }
+
+      const pillUptime = document.getElementById('pillUptime');
+      if (pillUptime) pillUptime.innerText = `${avgUptime}%`;
+      const pillLatency = document.getElementById('pillLatency');
+      if (pillLatency) pillLatency.innerText = latText;
+
+      // Banner severity: any hard outage outranks degradation.
+      const banner = document.getElementById('statusBanner');
+      if (banner) {
+        const level = downCount > 0 ? 'outage' : (degradedCount > 0 ? 'degraded' : 'ok');
+        banner.className = 'status-banner ' + level;
+      }
       
       const statEl = document.getElementById('metricStatus');
       const statSubEl = document.getElementById('metricStatusSub');
@@ -3306,11 +3441,16 @@
         if (activeIncidents === 0) {
           statEl.innerText = 'All Systems Operational';
           statEl.style.color = 'var(--text-primary)';
-          statSubEl.innerText = 'No active incidents detected';
+          statSubEl.innerText = `${state.services.length} service${state.services.length === 1 ? '' : 's'} reporting healthy`;
         } else {
-          statEl.innerText = 'Service Disruption';
-          statEl.style.color = 'var(--down)';
-          statSubEl.innerText = `${activeIncidents} service(s) currently affected`;
+          // Name the failure modes separately: "2 down" and "2 degraded" call
+          // for different responses, and "2 affected" hides which you have.
+          const parts = [];
+          if (downCount) parts.push(`${downCount} down`);
+          if (degradedCount) parts.push(`${degradedCount} degraded`);
+          statEl.innerText = downCount > 0 ? 'Outage Detected' : 'Degraded Performance';
+          statEl.style.color = downCount > 0 ? 'var(--down-fg)' : 'var(--degraded)';
+          statSubEl.innerText = `${parts.join(' · ')} of ${state.services.length} services`;
         }
       }
     }
