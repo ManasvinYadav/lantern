@@ -992,6 +992,50 @@
     }
     .btn.danger:hover { filter: brightness(1.1); }
 
+    /* Extended telemetry in the service drawer. 90 beats will not fit at the
+       card's 6-8px pill width inside a 600px drawer (90x6 + 89x3 = 807px), so
+       this variant narrows the band. The modifier is on the BAR, never on
+       .trend-block -- beatStatusFromBlock derives the heartbeat fingerprint
+       from a block's first non-reserved class. */
+    .telemetry-bar { gap: 2px; height: 32px; }
+    .telemetry-bar .trend-block { min-width: 3px; max-width: 6px; border-radius: 2px; }
+    .telemetry-window {
+      font-size: var(--text-xs); color: var(--text-muted);
+      font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    }
+
+    .latency-stats {
+      display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3);
+    }
+    .latency-stat {
+      display: flex; flex-direction: column; gap: 2px;
+      flex: 1 1 90px; min-width: 90px;
+      padding: 8px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .latency-stat-label {
+      font-size: 10px; color: var(--text-muted); font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .latency-stat-value {
+      font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600;
+      color: var(--text-primary); font-variant-numeric: tabular-nums;
+    }
+    .latency-empty { font-size: var(--text-sm); color: var(--text-muted); }
+
+    /* Badge snippet dialog */
+    .badge-preview {
+      display: flex; align-items: center; justify-content: center;
+      padding: var(--space-6);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .badge-preview img { max-width: 100%; height: auto; }
+    .snippet-copy { font-size: 11px; padding: 2px 8px; }
+
     /* Public Mode Overrides */
     body.is-public .hide-public { display: none !important; }
 
@@ -1626,6 +1670,16 @@
           </div>
         </div>
 
+        <!-- Extended Telemetry -->
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px; gap:8px; flex-wrap:wrap;">
+            <div class="section-label" style="margin-bottom:0;">Recent Checks</div>
+            <span class="telemetry-window" id="sdBeatsWindow">&mdash;</span>
+          </div>
+          <div class="trend-bar telemetry-bar" id="sdBeatsBar"></div>
+          <div class="latency-stats" id="sdLatencyStats"></div>
+        </div>
+
         <!-- Uptime Trend Graph -->
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
@@ -1851,7 +1905,7 @@
       services: isPublic ? '/api/public/services' : '/api/services',
       groups: isPublic ? '/api/public/groups' : '/api/groups',
       group: (name) => `/api/services/${encodeURIComponent(name)}/group`,
-      history: (name) => `/api/services/${encodeURIComponent(name)}/history?limit=50`,
+      history: (name, limit = 50) => `/api/services/${encodeURIComponent(name)}/history?limit=${limit}`,
       diagnostics: '/api/diagnostics',
       diagnostic: (id) => `/api/diagnostics/${id}`,
       strip: (name) => `/api/services/${encodeURIComponent(name)}/strip`,
@@ -2330,7 +2384,7 @@
         <button type="button" class="card-menu-item" role="menuitem" data-action="edit">Edit Configuration</button>
         <button type="button" class="card-menu-item" role="menuitem" data-action="check"${monitored ? '' : ' disabled'}
           title="${monitored ? 'Run this monitor now' : 'Only available for services Lantern actively probes'}">Trigger Manual Check</button>
-        <button type="button" class="card-menu-item" role="menuitem" data-action="badge">Copy Badge URL</button>
+        <button type="button" class="card-menu-item" role="menuitem" data-action="badge">Badge &amp; Embed</button>
         <div class="card-menu-sep"></div>
         <button type="button" class="card-menu-item danger" role="menuitem" data-action="delete">Delete Service</button>`;
     }
@@ -2407,16 +2461,8 @@
       }
 
       if (action === 'badge') {
-        const url = window.location.origin + API.badge(name);
         closeCardMenu();
-        try {
-          await navigator.clipboard.writeText(url);
-          showToast('Badge URL copied', 'success');
-        } catch (err) {
-          // The clipboard API needs a secure context, which a plain-http
-          // homelab origin isn't. Show the URL so it can be copied by hand.
-          showToast(url, 'info');
-        }
+        openBadgeModal(name);
         return;
       }
 
@@ -2554,6 +2600,116 @@
         const pill = document.querySelector(`#sourceFilters .filter-pill[data-source="${key}"]`);
         if (pill) pill.dataset.empty = counts[key] === 0 ? '1' : '0';
       });
+    }
+
+    // ---- Extended telemetry -------------------------------------------------
+    // Min/avg/max across a beat window. Zero is excluded deliberately: the
+    // backend records 0 both for padding beats and for any event whose source
+    // reported no measurement (see HeartbeatBeat.LatencyMs), so counting zeros
+    // would drag every figure toward nothing.
+    function latencyStats(beats) {
+      const vals = [];
+      (beats || []).forEach(b => {
+        if (!b || b.status === 'empty') return;
+        if (typeof b.latency_ms !== 'number' || b.latency_ms <= 0) return;
+        vals.push(b.latency_ms);
+      });
+      if (!vals.length) return null;
+      let min = Infinity, max = -Infinity, total = 0;
+      for (let i = 0; i < vals.length; i++) {
+        if (vals[i] < min) min = vals[i];
+        if (vals[i] > max) max = vals[i];
+        total += vals[i];
+      }
+      return { min: min, max: max, avg: Math.round(total / vals.length), samples: vals.length };
+    }
+
+    function renderLatencyStats(el, beats) {
+      const st = latencyStats(beats);
+      if (!st) {
+        el.innerHTML = '<span class="latency-empty">No latency recorded in this window.</span>';
+        return;
+      }
+      const cell = (label, value) =>
+        `<div class="latency-stat"><span class="latency-stat-label">${label}</span>`
+        + `<span class="latency-stat-value">${value}</span></div>`;
+      el.innerHTML = cell('Min', st.min + ' ms')
+        + cell('Avg', st.avg + ' ms')
+        + cell('Max', st.max + ' ms')
+        + cell('Samples', st.samples);
+    }
+
+    // Renders the 90-check window into the drawer. Reuses renderTrendBlock, so
+    // these beats get the shared #beatTooltip for free and there is only ever
+    // one beat renderer to keep correct.
+    async function loadServiceTelemetry(name) {
+      const bar = document.getElementById('sdBeatsBar');
+      const stats = document.getElementById('sdLatencyStats');
+      const windowEl = document.getElementById('sdBeatsWindow');
+      if (!bar || !stats) return;
+
+      bar.innerHTML = '';
+      stats.innerHTML = '<span class="latency-empty">Loading&hellip;</span>';
+
+      try {
+        const res = await authFetch(API.history(name, 90));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const events = Array.isArray(data.events) ? data.events : [];
+
+        // The endpoint returns newest-first; the bar reads left-to-right
+        // oldest-first, matching the card's heartbeat.
+        const beats = events.slice().reverse().map(e => ({
+          status: e.status,
+          timestamp: e.timestamp,
+          msg: e.message,
+          latency_ms: typeof e.latency_ms === 'number' ? e.latency_ms : 0
+        }));
+
+        bar.innerHTML = beats.map(renderTrendBlock).join('');
+        if (windowEl) {
+          windowEl.innerText = beats.length ? `last ${beats.length} checks` : 'no checks recorded';
+        }
+        renderLatencyStats(stats, beats);
+      } catch (err) {
+        if (windowEl) windowEl.innerText = '';
+        stats.innerHTML = '<span class="latency-empty">Could not load telemetry.</span>';
+        console.error('Error loading telemetry:', err);
+      }
+    }
+
+    // ---- Badge snippets -----------------------------------------------------
+    function openBadgeModal(name) {
+      const url = window.location.origin + API.badge(name);
+      const md = document.getElementById('badgeSnippetMd');
+      const html = document.getElementById('badgeSnippetHtml');
+      const raw = document.getElementById('badgeSnippetUrl');
+      const img = document.getElementById('badgePreviewImg');
+      const title = document.getElementById('badgeModalTitle');
+
+      if (md) md.value = `![${name}](${url})`;
+      if (html) html.value = `<img src="${url}" alt="${name} status" />`;
+      if (raw) raw.value = url;
+      if (img) {
+        // Cache-bust so reopening shows the current status, not a stale badge.
+        img.src = url + '?t=' + Date.now();
+        img.alt = name + ' status badge';
+      }
+      if (title) title.innerText = 'Badge & Embed — ' + name;
+      openOverlay('badgeModalOverlay');
+    }
+
+    async function copyFieldValue(fieldId) {
+      const el = document.getElementById(fieldId);
+      if (!el) return;
+      el.select();
+      try {
+        await navigator.clipboard.writeText(el.value);
+        showToast('Copied to clipboard', 'success');
+      } catch (err) {
+        // Secure context required; the field is already selected so Ctrl+C works.
+        showToast('Press Ctrl/Cmd+C to copy the selected text', 'info');
+      }
     }
 
     // Initialization
@@ -2807,6 +2963,11 @@
         const next = !toggleIsOn(t);
         setToggle(t, next);
         t.dispatchEvent(new CustomEvent('toggle-change', { bubbles: true, detail: { on: next } }));
+      });
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest && e.target.closest('[data-copy-from]');
+        if (btn) copyFieldValue(btn.dataset.copyFrom);
       });
 
       bindValidation();
@@ -3974,6 +4135,7 @@
       openDrawer('serviceDrawerOverlay');
 
       // Load Metadata & Docker Controls
+      loadServiceTelemetry(name);
       loadServiceMetadata(name);
       if (!isPublic) {
         loadDockerControls(name);
@@ -4007,14 +4169,20 @@
             list.innerHTML = '<div style="color:var(--text-muted);font-size:13px; background: var(--surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">No incidents in the last 30 days.</div>';
             return;
           }
-          list.innerHTML = d.incidents.map(inc => `
-            <div style="background: var(--panel-bg); border-left: 3px solid var(--down); padding: 12px; border-radius: 4px;">
-              <div style="font-weight:500; font-size:13px; margin-bottom:4px;">${escapeHtml(inc.trigger_message)}</div>
-              <div style="font-size:12px; color:var(--text-muted); font-family:var(--font-mono)">
-                ${formatTS(inc.started_at)} — ${inc.ended_at ? formatTS(inc.ended_at) : 'Ongoing'} (${inc.duration_minutes}m)
-              </div>
-            </div>
-          `).join('');
+          list.innerHTML = `
+            <table>
+              <thead>
+                <tr><th>Started</th><th>Duration</th><th>Message</th></tr>
+              </thead>
+              <tbody>
+                ${d.incidents.map(inc => `
+                  <tr>
+                    <td class="ts-cell">${formatTS(inc.started_at)}</td>
+                    <td class="ts-cell">${inc.ended_at ? inc.duration_minutes + 'm' : 'ongoing'}</td>
+                    <td style="color:${inc.in_maintenance ? 'var(--text-muted)' : 'var(--down-fg)'};">${escapeHtml(inc.trigger_message)}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>`;
         }).catch(e=>console.error());
       }
 
@@ -4588,6 +4756,50 @@
         <div class="modal-footer-actions">
           <button type="button" class="btn" data-close-overlay="monitorModalOverlay">Cancel</button>
           <button type="button" class="btn primary" id="btnSaveMonitor">Save Monitor</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hide-public" id="badgeModalOverlay" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="badgeModalTitle">
+      <div class="modal-header">
+        <div class="modal-title" id="badgeModalTitle">Badge &amp; Embed</div>
+        <button type="button" class="modal-close" data-close-overlay="badgeModalOverlay" aria-label="Close">&#10005;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-desc">The badge route is public and unauthenticated, so these embed anywhere.</div>
+        <div class="badge-preview">
+          <img id="badgePreviewImg" alt="Live status badge preview" />
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Markdown</span>
+            <button type="button" class="btn snippet-copy" data-copy-from="badgeSnippetMd">Copy</button>
+          </div>
+          <input type="text" class="form-input" id="badgeSnippetMd" readonly />
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>HTML</span>
+            <button type="button" class="btn snippet-copy" data-copy-from="badgeSnippetHtml">Copy</button>
+          </div>
+          <input type="text" class="form-input" id="badgeSnippetHtml" readonly />
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Raw URL</span>
+            <button type="button" class="btn snippet-copy" data-copy-from="badgeSnippetUrl">Copy</button>
+          </div>
+          <input type="text" class="form-input" id="badgeSnippetUrl" readonly />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-footer-actions">
+          <button type="button" class="btn" data-close-overlay="badgeModalOverlay">Close</button>
         </div>
       </div>
     </div>
