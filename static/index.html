@@ -809,6 +809,81 @@
       .modal-header, .modal-footer, .modal-body { padding: var(--space-4); }
     }
 
+    /* Card quick-action menu. The trigger lives in the card; the menu itself
+       is a single shared node on <body> — .service-card sets
+       `contain: layout style`, which traps position:fixed descendants. */
+    .service-header-right { display: flex; align-items: center; gap: var(--space-2); }
+    .card-menu-btn {
+      background: transparent; border: 1px solid transparent;
+      color: var(--text-muted); cursor: pointer;
+      width: 24px; height: 24px; line-height: 1;
+      border-radius: var(--radius-sm);
+      font-size: 15px; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0;
+      transition: opacity var(--duration-fast) var(--ease-out),
+                  color var(--duration-fast) var(--ease-out),
+                  background-color var(--duration-fast) var(--ease-out);
+    }
+    /* Revealed on hover, but always present for keyboard and touch users. */
+    .service-card:hover .card-menu-btn,
+    .card-menu-btn:focus-visible,
+    .card-menu-btn[aria-expanded="true"] { opacity: 1; }
+    .card-menu-btn:hover,
+    .card-menu-btn[aria-expanded="true"] {
+      color: var(--text-primary); background: var(--panel-hover);
+    }
+    .card-menu-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+    @media (hover: none) { .card-menu-btn { opacity: 1; } }
+
+    .card-menu {
+      position: fixed; top: 0; left: 0; z-index: 1150;
+      min-width: 220px; padding: var(--space-1);
+      background: var(--surface-3);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-raised);
+      opacity: 0; pointer-events: none;
+      transform: scale(0.97);
+      transition: opacity var(--duration-fast) var(--ease-out),
+                  transform var(--duration-fast) var(--ease-out);
+      will-change: transform, opacity;
+    }
+    .card-menu.open { opacity: 1; pointer-events: auto; transform: scale(1); }
+
+    .card-menu-item {
+      display: flex; align-items: center; width: 100%;
+      background: transparent; border: none;
+      padding: 7px 10px; border-radius: var(--radius-sm);
+      font-family: var(--font-sans); font-size: var(--text-base);
+      color: var(--text-secondary); text-align: left; cursor: pointer;
+      transition: background-color var(--duration-fast) var(--ease-out),
+                  color var(--duration-fast) var(--ease-out);
+    }
+    .card-menu-item:hover:not(:disabled) { background: var(--panel-hover); color: var(--text-primary); }
+    .card-menu-item:focus-visible { outline: none; background: var(--panel-hover); color: var(--text-primary); }
+    .card-menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+    .card-menu-item.danger { color: var(--down-fg); }
+    .card-menu-item.danger:hover:not(:disabled) { background: var(--down-bg); color: var(--down-fg); }
+    .card-menu-sep { height: 1px; background: var(--border); margin: var(--space-1) 0; }
+
+    .card-menu-confirm { padding: var(--space-3); max-width: 260px; }
+    .card-menu-confirm-title {
+      font-size: var(--text-base); font-weight: 600; color: var(--text-primary);
+      margin-bottom: var(--space-2);
+    }
+    .card-menu-confirm-body {
+      font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5;
+    }
+    .card-menu-confirm-actions {
+      display: flex; justify-content: flex-end; gap: var(--space-2);
+      margin-top: var(--space-4);
+    }
+    .btn.danger {
+      background: var(--down); border-color: var(--down); color: var(--on-accent);
+    }
+    .btn.danger:hover { filter: brightness(1.1); }
+
     /* Public Mode Overrides */
     body.is-public .hide-public { display: none !important; }
 
@@ -1653,6 +1728,9 @@
       webhookDeliveries: '/api/webhooks/deliveries',
       monitors: '/api/monitors',
       serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`,
+      serviceCheck: (name) => `/api/services/${encodeURIComponent(name)}/check`,
+      deleteService: (name) => `/api/services/${encodeURIComponent(name)}`,
+      badge: (name) => `/api/badge/${encodeURIComponent(name)}.svg`,
       activity: '/api/activity',
       exportHistory: (name, format) => `/api/services/${encodeURIComponent(name)}/export?format=${format}`,
       backup: '/api/backup'
@@ -2101,6 +2179,164 @@
         .forEach(id => wire(id, refreshWebhookValidity));
     }
 
+    // ---- Card quick actions -------------------------------------------------
+    // One shared menu node on <body>, positioned from the trigger's rect. It
+    // cannot live inside the card for the same reason the beat popover cannot:
+    // .service-card sets `contain: layout style`, which makes every card a
+    // containing block even for position:fixed descendants.
+    let cardMenuService = null;
+
+    function cardMenuItemsHTML(svc) {
+      const monitored = !!svc.monitor_type;
+      return `
+        <button type="button" class="card-menu-item" role="menuitem" data-action="edit">Edit Configuration</button>
+        <button type="button" class="card-menu-item" role="menuitem" data-action="check"${monitored ? '' : ' disabled'}
+          title="${monitored ? 'Run this monitor now' : 'Only available for services Lantern actively probes'}">Trigger Manual Check</button>
+        <button type="button" class="card-menu-item" role="menuitem" data-action="badge">Copy Badge URL</button>
+        <div class="card-menu-sep"></div>
+        <button type="button" class="card-menu-item danger" role="menuitem" data-action="delete">Delete Service</button>`;
+    }
+
+    function cardMenuConfirmHTML(svc) {
+      return `
+        <div class="card-menu-confirm">
+          <div class="card-menu-confirm-title">Delete ${escapeHtml(svc.service_name)}?</div>
+          <div class="card-menu-confirm-body">
+            Removes its history, group, maintenance state, monitor and scoped
+            tokens. Webhook delivery records are kept as an audit trail.
+            <br /><br />
+            This deletes Lantern's record, not the service. If a running
+            container is still visible to Docker discovery, it is re-registered
+            on the next poll (about 60s).
+          </div>
+          <div class="card-menu-confirm-actions">
+            <button type="button" class="btn" data-action="cancel">Cancel</button>
+            <button type="button" class="btn danger" data-action="confirm-delete">Delete</button>
+          </div>
+        </div>`;
+    }
+
+    function positionCardMenu(btn) {
+      const menu = document.getElementById('cardMenu');
+      if (!menu) return;
+      const MARGIN = 8;
+      const r = btn.getBoundingClientRect();
+      const m = menu.getBoundingClientRect();
+      let left = Math.max(MARGIN, Math.min(r.right - m.width, window.innerWidth - m.width - MARGIN));
+      let top = r.bottom + 6;
+      if (top + m.height > window.innerHeight - MARGIN) top = r.top - m.height - 6;
+      if (top < MARGIN) top = MARGIN;
+      menu.style.left = Math.round(left) + 'px';
+      menu.style.top = Math.round(top) + 'px';
+    }
+
+    function closeCardMenu() {
+      const menu = document.getElementById('cardMenu');
+      if (menu) {
+        menu.classList.remove('open');
+        menu.setAttribute('aria-hidden', 'true');
+      }
+      document.querySelectorAll('.card-menu-btn[aria-expanded="true"]')
+        .forEach(b => b.setAttribute('aria-expanded', 'false'));
+      cardMenuService = null;
+    }
+
+    function openCardMenu(btn, name) {
+      const svc = (state.services || []).find(s => s.service_name === name);
+      const menu = document.getElementById('cardMenu');
+      if (!svc || !menu) return;
+      closeCardMenu();
+      cardMenuService = name;
+      menu.innerHTML = cardMenuItemsHTML(svc);
+      menu.setAttribute('aria-hidden', 'false');
+      menu.classList.add('open');
+      positionCardMenu(btn);
+      btn.setAttribute('aria-expanded', 'true');
+      const first = menu.querySelector('.card-menu-item:not([disabled])');
+      if (first) first.focus();
+    }
+
+    async function handleCardMenuAction(action) {
+      const name = cardMenuService;
+      if (!name) return;
+      const menu = document.getElementById('cardMenu');
+      const svc = (state.services || []).find(s => s.service_name === name);
+
+      if (action === 'edit') {
+        closeCardMenu();
+        openMonitorModal(name);
+        return;
+      }
+
+      if (action === 'badge') {
+        const url = window.location.origin + API.badge(name);
+        closeCardMenu();
+        try {
+          await navigator.clipboard.writeText(url);
+          showToast('Badge URL copied', 'success');
+        } catch (err) {
+          // The clipboard API needs a secure context, which a plain-http
+          // homelab origin isn't. Show the URL so it can be copied by hand.
+          showToast(url, 'info');
+        }
+        return;
+      }
+
+      if (action === 'check') {
+        closeCardMenu();
+        try {
+          const res = await authFetch(API.serviceCheck(name), { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 202) {
+            showToast(`Check queued for ${name}`, 'success');
+          } else if (res.status === 409) {
+            showToast(data.error || 'Nothing to check for this service', 'warning');
+          } else {
+            throw new Error(data.error || `HTTP ${res.status}`);
+          }
+        } catch (err) {
+          showToast(`Check failed: ${err.message}`, 'error');
+        }
+        return;
+      }
+
+      // Delete is two-step: the menu swaps to a confirmation rather than
+      // firing a browser confirm() or deleting on a single click.
+      if (action === 'delete' && menu && svc) {
+        menu.innerHTML = cardMenuConfirmHTML(svc);
+        positionCardMenu(document.querySelector(`.card-menu-btn[aria-expanded="true"]`) || menu);
+        const cancel = menu.querySelector('[data-action="cancel"]');
+        if (cancel) cancel.focus();
+        return;
+      }
+
+      if (action === 'cancel' && menu && svc) {
+        menu.innerHTML = cardMenuItemsHTML(svc);
+        const first = menu.querySelector('.card-menu-item:not([disabled])');
+        if (first) first.focus();
+        return;
+      }
+
+      if (action === 'confirm-delete') {
+        closeCardMenu();
+        try {
+          const res = await authFetch(API.deleteService(name), { method: 'DELETE' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          // Drop it locally. There is no service_deleted WS frame, so other
+          // connected tabs catch up on their next poll; ours is authoritative
+          // again in 30s either way.
+          state.services = (state.services || []).filter(x => x.service_name !== name);
+          renderServices();
+          updateMetrics();
+          showToast(`${name} deleted`, 'success');
+        } catch (err) {
+          showToast(`Delete failed: ${err.message}`, 'error');
+          loadData();
+        }
+      }
+    }
+
     // Initialization
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -2277,6 +2513,37 @@
         });
       });
 
+      // Card action menu. Delegated on the grid, so cards created later by
+      // renderServices need no rebinding.
+      const servicesGrid = document.getElementById('servicesGrid');
+      if (servicesGrid) {
+        servicesGrid.addEventListener('click', (e) => {
+          const trigger = e.target && e.target.closest && e.target.closest('.card-menu-btn');
+          if (!trigger) return;
+          e.stopPropagation();
+          const name = trigger.dataset.menuFor;
+          if (cardMenuService === name) closeCardMenu();
+          else openCardMenu(trigger, name);
+        });
+      }
+
+      document.addEventListener('click', (e) => {
+        const menu = document.getElementById('cardMenu');
+        if (!menu || !menu.classList.contains('open')) return;
+        const item = e.target && e.target.closest && e.target.closest('[data-action]');
+        if (item && menu.contains(item)) {
+          if (!item.disabled) handleCardMenuAction(item.dataset.action);
+          return;
+        }
+        if (!e.target.closest('.card-menu-btn')) closeCardMenu();
+      });
+
+      // The menu is position:fixed while the grid scrolls beneath it.
+      window.addEventListener('scroll', () => { if (cardMenuService) closeCardMenu(); },
+        { passive: true, capture: true });
+      window.addEventListener('resize', () => { if (cardMenuService) closeCardMenu(); },
+        { passive: true });
+
       // Toggles: one delegated handler covers every switch on the page.
       document.addEventListener('click', (e) => {
         const t = e.target && e.target.closest && e.target.closest('.toggle');
@@ -2296,6 +2563,7 @@
 
       // Escape pops one layer; Tab is trapped inside the topmost one.
       document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && cardMenuService) { closeCardMenu(); return; }
         if (!overlayStack.length) return;
         if (e.key === 'Escape') {
           e.preventDefault();
@@ -3132,7 +3400,11 @@
               ${monitorBadge}
             </div>
           </div>
-          <div class="service-status-text">${statText}</div>
+          <div class="service-header-right">
+            <div class="service-status-text">${statText}</div>
+            <button type="button" class="card-menu-btn hide-public" data-menu-for="${escapeHtml(s.service_name)}"
+              aria-label="Actions for ${escapeHtml(s.service_name)}" aria-haspopup="menu" aria-expanded="false">&#8943;</button>
+          </div>
         </div>
         <div class="service-message" title="${escapeHtml(s.message)}">${escapeHtml(s.message || 'No message')}</div>
         ${trendHTML}
@@ -3994,6 +4266,7 @@
     </div>
   </div>
 
+  <div id="cardMenu" class="card-menu hide-public" role="menu" aria-hidden="true"></div>
   <div id="beatTooltip" class="beat-tooltip" role="tooltip" aria-hidden="true"></div>
 </body>
 </html>
