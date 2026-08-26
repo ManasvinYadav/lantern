@@ -348,7 +348,8 @@
       font-weight: 500;
       cursor: pointer;
       
-      transition: all 0.2s;
+      transition: background-color 0.2s, border-color 0.2s, color 0.2s,
+                  transform 0.2s, box-shadow 0.2s;
     }
     .btn:hover { background: var(--panel-hover); border-color: var(--border-focus); }
     .btn:active { transform: scale(0.97); }
@@ -380,7 +381,7 @@
       font-size: 12px;
       font-weight: 500;
       font-family: var(--font-sans);
-      transition: all 0.2s;
+      transition: background-color 0.2s, border-color 0.2s, color 0.2s;
     }
     .view-toggle-btn:hover {
       color: var(--text-primary);
@@ -788,7 +789,8 @@
     .diag-copy-btn {
       position: absolute; top: 16px; right: 16px; padding: 4px 8px; font-size: 11px;
       background: var(--panel-hover); border: 1px solid var(--border); border-radius: 4px;
-      color: var(--text-secondary); cursor: pointer; transition: all 0.2s;
+      color: var(--text-secondary); cursor: pointer;
+      transition: background-color 0.2s, border-color 0.2s, color 0.2s;
     }
     .diag-copy-btn:hover { background: var(--panel-hover); border-color: var(--accent); color: var(--accent); }
     
@@ -821,7 +823,7 @@
       font-size: 11px;
       font-weight: 500;
       font-family: var(--font-sans);
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s;
     }
     .uptime-range-btn:hover {
       color: var(--text-primary);
@@ -1192,7 +1194,8 @@
     .toggle-hint { font-size: var(--text-sm); color: var(--text-muted); margin-top: 2px; }
     .theme-btn {
       flex: 1; justify-content: center; text-align: center;
-      transition: all 0.2s;
+      transition: background-color 0.2s, border-color 0.2s, color 0.2s,
+                  box-shadow 0.2s;
     }
     .theme-btn.active {
       background: var(--panel-hover);
@@ -1269,7 +1272,7 @@
       font-size: 12px;
       color: var(--text-primary);
       outline: none;
-      transition: all 0.2s;
+      transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
     }
     .search-input:focus {
       border-color: var(--accent);
@@ -1341,7 +1344,8 @@
       box-shadow: var(--shadow-raised);
       transform: translateY(20px);
       opacity: 0;
-      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                  opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .toast.show {
       transform: translateY(0);
@@ -3932,8 +3936,14 @@
         return;
       }
 
-      if (grid.children.length === 1 && grid.children[0].classList.contains('empty-state')) {
-        grid.innerHTML = '';
+      // Placeholder chrome — the six skeleton cards from renderSkeletons() and
+      // the empty-state block — is not part of the reconcile set below, which
+      // only tracks .service-card nodes. Drop it explicitly or it survives
+      // forever, pinned above the real cards, and its presence in
+      // grid.children also throws off the positional insert at the end of
+      // the loop.
+      for (const node of Array.from(grid.children)) {
+        if (!node.classList.contains('service-card')) node.remove();
       }
 
       const existingCards = Array.from(grid.querySelectorAll('.service-card'));
@@ -3980,7 +3990,6 @@
             }
 
             card.innerHTML = buildCardHTML(s, cls, statText, trendHTML);
-            grid.appendChild(card);
           } else {
             // In-place granular updates (no DOM reconstruction = smooth 60fps)
             const targetClass = 'service-card ' + cls;
@@ -4058,10 +4067,15 @@
               if (uptimeLabel.innerText !== uptimeText) uptimeLabel.innerText = uptimeText;
             }
 
-            if (grid.children[index] !== card) {
-              grid.insertBefore(card, grid.children[index]);
-            }
           }
+
+          // Position every card, new or reused. Ranked search order has to
+          // apply to freshly created cards too, which the old appendChild
+          // dropped to the bottom regardless of score. grid.children holds
+          // nothing but cards by this point, so index lines up 1:1 with
+          // filtered; a null anchor appends.
+          const at = grid.children[index];
+          if (at !== card) grid.insertBefore(card, at || null);
         } catch (err) {
           console.error("Failed to render service:", s.service_name, err);
         }
