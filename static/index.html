@@ -700,13 +700,70 @@
     /* Public Mode Overrides */
     body.is-public .hide-public { display: none !important; }
 
-    /* Tooltip */
-    [data-tooltip] { position: relative; cursor: help; }
-    [data-tooltip]:hover::after {
-      content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-      background: var(--tooltip-bg); border: 1px solid var(--tooltip-border); color: var(--tooltip-fg);
-      padding: 6px 10px; font-size: 11px; border-radius: 4px; white-space: nowrap; z-index: 10; margin-bottom: 6px;
-       font-family: var(--font-sans); font-weight: 400;
+    /* =====================================================================
+       Heartbeat popover
+
+       One shared node, positioned from JS. It replaces a [data-tooltip]
+       ::after pseudo-element, which could only ever render a single
+       attr() string on one nowrap line -- no status/time/latency
+       hierarchy, and no way to wrap a long status message.
+       ===================================================================== */
+    .beat-tooltip {
+      position: fixed; top: 0; left: 0; z-index: 1200;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity var(--duration-fast) var(--ease-out),
+                  transform var(--duration-fast) var(--ease-out);
+      will-change: transform, opacity;
+      min-width: 150px; max-width: 280px;
+      padding: 8px 10px;
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-raised);
+      font-family: var(--font-sans);
+      font-size: var(--text-xs);
+      line-height: 1.45;
+      color: var(--text-primary);
+    }
+    .beat-tooltip.visible { opacity: 1; transform: translateY(0); }
+
+    .bt-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 10px;
+    }
+    .bt-status {
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+    }
+    .bt-status.up { color: var(--up); }
+    .bt-status.down { color: var(--down); }
+    .bt-status.degraded { color: var(--degraded); }
+    .bt-status.maintenance { color: var(--maint); }
+    .bt-status.unknown { color: var(--unknown); }
+    .bt-ago {
+      color: var(--text-muted); white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .bt-time {
+      margin-top: 2px; color: var(--text-secondary); white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .bt-latency {
+      display: inline-block; margin-top: 6px;
+      padding: 1px 7px; border-radius: 999px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .bt-msg {
+      margin-top: 6px; padding-top: 6px;
+      border-top: 1px solid var(--border);
+      color: var(--text-secondary);
+      overflow-wrap: anywhere;
     }
 
     /* =====================================================================
@@ -1023,9 +1080,10 @@
       document.documentElement.style.setProperty('--accent', accent);
       document.documentElement.style.setProperty('--accent-glow', accent + '40');
       document.documentElement.style.setProperty('--accent-bg', accent + '20');
-      document.documentElement.style.setProperty('--up', accent);
-      document.documentElement.style.setProperty('--up-glow', accent + '40');
-      document.documentElement.style.setProperty('--up-bg', accent + '20');
+      // The accent deliberately does NOT repaint --up/--down/--degraded.
+      // Those are semantic. This block used to override --up here, so any
+      // visitor with a stored accent would still have had it applied on
+      // load even after setAccentColor stopped writing it.
     }
   </script>
 </head>
@@ -1694,6 +1752,8 @@
       setTimeout(() => block.classList.remove('beat-pulse'), 500);
 
       while (trendBar.children.length > 30) {
+        // Never leave the popover pointing at a block that just aged out.
+        if (trendBar.firstElementChild === activeBeatBlock) hideBeatTooltip();
         trendBar.firstElementChild.remove();
       }
 
@@ -1707,15 +1767,90 @@
         .join(',');
     }
 
-    // Initialization
+    // ---- Heartbeat popover -------------------------------------------------
     // Delegated on document with mouseover (which bubbles, unlike mouseenter)
     // so blocks that slide in later via applyLiveHeartbeat are covered too,
-    // with no per-block listeners to attach or clean up.
+    // with no per-block listeners to attach or clean up across ~660 blocks.
+    let activeBeatBlock = null;
+    let beatTooltipEl = null;
+
+    function getBeatTooltip() {
+      if (!beatTooltipEl) beatTooltipEl = document.getElementById('beatTooltip');
+      return beatTooltipEl;
+    }
+
+    // Places the popover from the hovered block's viewport rect: centred
+    // above it, clamped inside the viewport, flipped below when the block
+    // sits too close to the top. left/top are set (not transitioned) so the
+    // only animated properties stay opacity and transform.
+    function positionBeatTooltip(block) {
+      const tip = getBeatTooltip();
+      if (!tip) return;
+      const MARGIN = 8;
+      const r = block.getBoundingClientRect();
+      const t = tip.getBoundingClientRect();
+
+      let left = r.left + (r.width / 2) - (t.width / 2);
+      left = Math.max(MARGIN, Math.min(left, window.innerWidth - t.width - MARGIN));
+
+      let top = r.top - t.height - MARGIN;
+      if (top < MARGIN) top = r.bottom + MARGIN;
+
+      tip.style.left = Math.round(left) + 'px';
+      tip.style.top = Math.round(top) + 'px';
+    }
+
+    function showBeatTooltip(block) {
+      const tip = getBeatTooltip();
+      if (!tip) return;
+      // Content first: positioning needs the popover's measured size.
+      tip.innerHTML = beatTooltipHTML(block.dataset);
+      tip.setAttribute('aria-hidden', 'false');
+      positionBeatTooltip(block);
+      tip.classList.add('visible');
+      activeBeatBlock = block;
+    }
+
+    function hideBeatTooltip() {
+      const tip = getBeatTooltip();
+      activeBeatBlock = null;
+      if (!tip) return;
+      tip.classList.remove('visible');
+      tip.setAttribute('aria-hidden', 'true');
+    }
+
     document.addEventListener('mouseover', (e) => {
       const block = e.target && e.target.closest && e.target.closest('.trend-block');
-      if (!block || !block.dataset.isoTime) return;
-      block.setAttribute('data-tooltip', describeBeat(block.dataset));
+      if (!block || !block.dataset.isoTime) {
+        if (activeBeatBlock) hideBeatTooltip();
+        return;
+      }
+      if (block === activeBeatBlock) return;
+      showBeatTooltip(block);
     });
+
+    document.addEventListener('mouseout', (e) => {
+      if (!activeBeatBlock) return;
+      const from = e.target && e.target.closest && e.target.closest('.trend-block');
+      if (!from) return;
+      const to = e.relatedTarget;
+      // Sliding from one beat straight onto the next re-fires mouseover, so
+      // don't flicker the popover off in between.
+      if (to && to.closest && to.closest('.trend-block')) return;
+      hideBeatTooltip();
+    });
+
+    // The popover is position: fixed while the grid scrolls underneath it, so
+    // it has to be dismissed rather than chased. Capture phase catches scrolls
+    // on inner containers (the drawer body) as well as the page.
+    window.addEventListener('scroll', () => {
+      if (activeBeatBlock) hideBeatTooltip();
+    }, { passive: true, capture: true });
+    window.addEventListener('resize', () => {
+      if (activeBeatBlock) hideBeatTooltip();
+    }, { passive: true });
+
+    // Initialization
 
     document.addEventListener('DOMContentLoaded', () => {
       if (isPublic) document.body.classList.add('is-public');
@@ -2144,9 +2279,6 @@
         document.documentElement.style.removeProperty('--accent');
         document.documentElement.style.removeProperty('--accent-glow');
         document.documentElement.style.removeProperty('--accent-bg');
-        document.documentElement.style.removeProperty('--up');
-        document.documentElement.style.removeProperty('--up-glow');
-        document.documentElement.style.removeProperty('--up-bg');
         localStorage.removeItem('lantern_accent');
         if (hexDisp) hexDisp.innerText = 'Default';
         if (picker) picker.value = '#10b981';
@@ -2154,9 +2286,6 @@
         document.documentElement.style.setProperty('--accent', color);
         document.documentElement.style.setProperty('--accent-glow', color + '40');
         document.documentElement.style.setProperty('--accent-bg', color + '20');
-        document.documentElement.style.setProperty('--up', color);
-        document.documentElement.style.setProperty('--up-glow', color + '40');
-        document.documentElement.style.setProperty('--up-bg', color + '20');
         localStorage.setItem('lantern_accent', color);
         if (hexDisp) hexDisp.innerText = color;
         if (picker) picker.value = color;
@@ -2554,7 +2683,7 @@
       if (status === 'empty') return '<div class="trend-block empty"></div>';
 
       // The raw values are stored on the element and the tooltip text is
-      // composed on hover (see describeBeat), so the relative time is
+      // composed on hover (see beatTooltipHTML), so the relative time is
       // computed when the user points at a block rather than being frozen
       // at whatever moment the card happened to be rendered.
       const iso = (beat && beat.timestamp) || '';
@@ -2579,20 +2708,32 @@
       return Math.floor(h / 24) + 'd ago';
     }
 
-    // Composes the tooltip for one heartbeat block from its data-* values:
-    // status, how long ago the check landed, its absolute local time, how
-    // long the check itself took, and the reported message.
-    function describeBeat(data) {
-      const parts = [];
-      if (data.status) parts.push(data.status);
+    // Composes the popover body for one heartbeat block from its data-*
+    // values, as structured markup rather than one joined string: status and
+    // relative time share a header row, then the absolute local time, then a
+    // latency pill, then the reported message. Every field is escaped -- msg
+    // is operator-supplied text arriving straight off the API.
+    function beatTooltipHTML(data) {
+      const status = data.status || 'UNKNOWN';
       const t = new Date(data.isoTime);
-      if (!isNaN(t.getTime())) {
-        parts.push(humanizeAgo(Date.now() - t.getTime()));
-        parts.push(t.toLocaleString());
+      const valid = !isNaN(t.getTime());
+      const ago = valid ? humanizeAgo(Date.now() - t.getTime()) : '';
+
+      let html = '<div class="bt-head">'
+        + '<span class="bt-status ' + escapeHtml(status.toLowerCase()) + '">'
+        + escapeHtml(status) + '</span>'
+        + (ago ? '<span class="bt-ago">' + escapeHtml(ago) + '</span>' : '')
+        + '</div>';
+      if (valid) {
+        html += '<div class="bt-time">' + escapeHtml(t.toLocaleString()) + '</div>';
       }
-      if (data.latency !== undefined && data.latency !== '') parts.push(data.latency + 'ms');
-      if (data.msg) parts.push(data.msg);
-      return parts.join(' — ');
+      if (data.latency !== undefined && data.latency !== '') {
+        html += '<span class="bt-latency">' + escapeHtml(String(data.latency)) + ' ms</span>';
+      }
+      if (data.msg) {
+        html += '<div class="bt-msg">' + escapeHtml(data.msg) + '</div>';
+      }
+      return html;
     }
 
     function buildCardHTML(s, cls, statText, trendHTML) {
@@ -3296,5 +3437,10 @@
       });
     }
   </script>
+  <!-- Shared heartbeat popover. It lives on <body> rather than inside a
+       card on purpose: .service-card sets `contain: layout style`, which
+       makes every card a containing block even for position: fixed
+       descendants, so a nested popover would be trapped in its card. -->
+  <div id="beatTooltip" class="beat-tooltip" role="tooltip" aria-hidden="true"></div>
 </body>
 </html>
