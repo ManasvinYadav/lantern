@@ -337,6 +337,12 @@ func isProtectedEndpoint(r *http.Request) bool {
 		return true
 	case strings.HasSuffix(path, "/monitor") && method != http.MethodGet:
 		return true
+	case strings.HasSuffix(path, "/check") && method == http.MethodPost:
+		return true
+	// Covers DELETE /api/services/{name}. Destructive and irreversible, so
+	// it sits behind the token whenever one is configured.
+	case strings.HasPrefix(path, "/api/services/") && method == http.MethodDelete:
+		return true
 	}
 	return false
 }
@@ -2080,6 +2086,10 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/services/{name}/monitor", handleGetServiceMonitor(db)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/monitor", handlePutServiceMonitor(db, scheduler)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/services/{name}/monitor", handleDeleteServiceMonitor(db, scheduler)).Methods(http.MethodDelete)
+	api.Handle("/services/{name}/check", handlePostServiceCheck(db, scheduler)).Methods(http.MethodPost)
+	// Registered after the more specific /services/{name}/... routes above.
+	// {name} matches a single path segment, so this cannot shadow them.
+	api.Handle("/services/{name}", handleDeleteService(db, scheduler)).Methods(http.MethodDelete)
 
 	api.Handle("/status", handlePostStatus(db, cfg, dispatcher, hub)).Methods(http.MethodPost)
 	api.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)

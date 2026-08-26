@@ -1085,3 +1085,141 @@ func invalidateServiceMetricsCache(serviceName string) {
 	delete(metricsCache, serviceName)
 	metricsCacheMutex.Unlock()
 }
+
+// ---------------------------------------------------------------------------
+// Service lifecycle: manual check trigger and service deletion
+// ---------------------------------------------------------------------------
+
+// serviceScopedTables lists every table keyed by service_name that holds a
+// service's own configuration or history, and so must be cleared when the
+// service is deleted.
+//
+// webhook_deliveries is deliberately absent: it is an audit log of what was
+// actually sent, and outlives the service it refers to. webhook_configs has no
+// service_name column at all — webhooks are configured per channel, globally.
+var serviceScopedTables = []string{
+	"status_events",
+	"diagnostic_runs",
+	"service_maintenance",
+	"maintenance_windows",
+	"service_groups",
+	"active_monitors",
+	"api_tokens",
+}
+
+// handleDeleteService handles DELETE /api/services/{name}.
+//
+// This removes Lantern's record of a service, not the service itself. A
+// running container that Docker discovery can still see is re-registered on
+// the next poll (LANTERN_DOCKER_POLL_SECONDS, default 60), so the UI warns
+// about that before calling this.
+func handleDeleteService(db *sql.DB, scheduler *monitorScheduler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(mux.Vars(r)["name"])
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "service name is required")
+			return
+		}
+
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM status_events WHERE service_name = ?`, name).Scan(&count); err != nil {
+			log.Printf("handleDeleteService count error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if count == 0 {
+			writeError(w, http.StatusNotFound, "unknown service")
+			return
+		}
+
+		// Stop the active-monitor ticker before the rows go. Deleting the
+		// active_monitors row on its own leaves the goroutine running, and it
+		// keeps writing status_events — which silently resurrects the service
+		// we were asked to remove. stop() is a no-op when nothing is scheduled.
+		scheduler.stop(name)
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Printf("handleDeleteService begin error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		deleted := make(map[string]int64, len(serviceScopedTables))
+		for _, table := range serviceScopedTables {
+			// Table names come from the package-level slice above, never from
+			// the request, so interpolating them here is not injectable.
+			res, err := tx.Exec(`DELETE FROM `+table+` WHERE service_name = ?`, name)
+			if err != nil {
+				log.Printf("handleDeleteService delete from %s: %v", table, err)
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			n, _ := res.RowsAffected()
+			deleted[table] = n
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Printf("handleDeleteService commit error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		log.Printf("service deleted: %s (%v)", name, deleted)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":       "ok",
+			"service_name": name,
+			"deleted":      deleted,
+		})
+	}
+}
+
+// handlePostServiceCheck handles POST /api/services/{name}/check: runs one
+// active-monitor probe immediately rather than waiting for the next tick.
+//
+// Returns 409 when there is nothing to probe. Push-based services and
+// containers found by Docker discovery report their own status, so there is no
+// target for Lantern to check on demand.
+func handlePostServiceCheck(db *sql.DB, scheduler *monitorScheduler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(mux.Vars(r)["name"])
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "service name is required")
+			return
+		}
+
+		var monitorType, target string
+		var enabled int
+		err := db.QueryRow(
+			`SELECT monitor_type, target, enabled FROM active_monitors WHERE service_name = ?`,
+			name).Scan(&monitorType, &target, &enabled)
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusConflict, "no active monitor configured for this service")
+			return
+		}
+		if err != nil {
+			log.Printf("handlePostServiceCheck db error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if enabled != 1 {
+			writeError(w, http.StatusConflict, "active monitor is disabled for this service")
+			return
+		}
+
+		scheduler.pool.enqueue(monitorCheckJob{
+			serviceName: name,
+			monitorType: monitorType,
+			target:      target,
+		})
+		// 202: the probe is queued, and its result arrives over the normal
+		// status_update / heartbeat broadcast once the worker runs it.
+		writeJSON(w, http.StatusAccepted, map[string]string{
+			"status":       "queued",
+			"service_name": name,
+			"monitor_type": monitorType,
+		})
+	}
+}

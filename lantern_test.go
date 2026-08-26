@@ -1,6 +1,14 @@
 package main
 
-import "testing"
+import (
+	"database/sql"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+
+	"github.com/gorilla/mux"
+)
 
 // ---------------------------------------------------------------------------
 // Heartbeat window: padding, ordering, uptime ratio
@@ -274,5 +282,228 @@ func TestDockerDiscoveryIgnored(t *testing.T) {
 				t.Errorf("dockerDiscoveryIgnored(%v) = %v, want %v", tc.labels, got, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Service lifecycle: deletion cascade and manual check trigger
+// ---------------------------------------------------------------------------
+
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db := initDB(&Config{DBPath: filepath.Join(t.TempDir(), "lantern-test.db")})
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// newTestScheduler builds the struct directly rather than calling
+// newMonitorPool, which spawns worker goroutines that would run real network
+// probes. Here the job channel is inspected instead.
+func newTestScheduler(db *sql.DB) *monitorScheduler {
+	pool := &monitorPool{jobs: make(chan monitorCheckJob, 8), db: db}
+	return &monitorScheduler{stopFns: make(map[string]chan struct{}), pool: pool, db: db}
+}
+
+// If a future migration adds a service-scoped table, this fails until the
+// author decides whether deleting a service should clear it.
+func TestServiceScopedTablesCoversSchema(t *testing.T) {
+	db := newTestDB(t)
+
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		tables = append(tables, n)
+	}
+
+	inCascade := make(map[string]bool, len(serviceScopedTables))
+	for _, tbl := range serviceScopedTables {
+		inCascade[tbl] = true
+	}
+	// Deliberately retained: an audit log of deliveries that were actually
+	// sent, which outlives the service it names.
+	exempt := map[string]bool{"webhook_deliveries": true}
+
+	for _, tbl := range tables {
+		cols, err := db.Query(`SELECT name FROM pragma_table_info(?)`, tbl)
+		if err != nil {
+			t.Fatalf("pragma_table_info(%s): %v", tbl, err)
+		}
+		hasServiceName := false
+		for cols.Next() {
+			var c string
+			if err := cols.Scan(&c); err != nil {
+				t.Fatalf("scan column: %v", err)
+			}
+			if c == "service_name" {
+				hasServiceName = true
+			}
+		}
+		cols.Close()
+
+		if hasServiceName && !inCascade[tbl] && !exempt[tbl] {
+			t.Errorf("table %q is keyed by service_name but is neither in serviceScopedTables nor exempt", tbl)
+		}
+	}
+
+	for _, tbl := range serviceScopedTables {
+		if !inCascade[tbl] {
+			continue
+		}
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?`, tbl).Scan(&n); err != nil || n != 1 {
+			t.Errorf("serviceScopedTables names %q, which does not exist in the schema", tbl)
+		}
+	}
+}
+
+func TestHandleDeleteServiceCascade(t *testing.T) {
+	db := newTestDB(t)
+	sched := newTestScheduler(db)
+
+	const svc = "cascade-probe"
+	seed := []struct {
+		q    string
+		args []any
+	}{
+		{`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+			[]any{svc, "up", "seed", "2026-08-26T00:00:00Z"}},
+		{`INSERT INTO diagnostic_runs (service_name, title, content, timestamp) VALUES (?,?,?,?)`,
+			[]any{svc, "t", "c", "2026-08-26T00:00:00Z"}},
+		{`INSERT INTO service_maintenance (service_name, enabled) VALUES (?,?)`, []any{svc, 1}},
+		{`INSERT INTO maintenance_windows (service_name, started_at) VALUES (?,?)`,
+			[]any{svc, "2026-08-26T00:00:00Z"}},
+		{`INSERT INTO service_groups (service_name, group_name) VALUES (?,?)`, []any{svc, "g"}},
+		{`INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled) VALUES (?,?,?,?,?)`,
+			[]any{svc, "http", "https://example.com", 60, 1}},
+		{`INSERT INTO api_tokens (token, service_name) VALUES (?,?)`, []any{"tok-cascade", svc}},
+		// Must survive the delete.
+		{`INSERT INTO webhook_deliveries (channel, service_name, old_status, new_status, success, http_status, created_at) VALUES (?,?,?,?,?,?,?)`,
+			[]any{"discord", svc, "up", "down", 1, 204, "2026-08-26T00:00:00Z"}},
+	}
+	for _, s := range seed {
+		if _, err := db.Exec(s.q, s.args...); err != nil {
+			t.Fatalf("seed %q: %v", s.q, err)
+		}
+	}
+
+	r := mux.NewRouter()
+	r.Handle("/api/services/{name}", handleDeleteService(db, sched)).Methods(http.MethodDelete)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/services/"+svc, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	for _, tbl := range serviceScopedTables {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+tbl+` WHERE service_name = ?`, svc).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", tbl, err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d row(s) for the deleted service", tbl, n)
+		}
+	}
+
+	var kept int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM webhook_deliveries WHERE service_name = ?`, svc).Scan(&kept); err != nil {
+		t.Fatalf("count webhook_deliveries: %v", err)
+	}
+	if kept != 1 {
+		t.Errorf("webhook_deliveries = %d rows, want 1 retained as an audit record", kept)
+	}
+}
+
+func TestHandleDeleteServiceUnknownIs404(t *testing.T) {
+	db := newTestDB(t)
+	r := mux.NewRouter()
+	r.Handle("/api/services/{name}", handleDeleteService(db, newTestScheduler(db))).Methods(http.MethodDelete)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/services/never-existed", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandlePostServiceCheck(t *testing.T) {
+	db := newTestDB(t)
+	sched := newTestScheduler(db)
+	r := mux.NewRouter()
+	r.Handle("/api/services/{name}/check", handlePostServiceCheck(db, sched)).Methods(http.MethodPost)
+
+	call := func(name string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/services/"+name+"/check", nil))
+		return rec
+	}
+
+	t.Run("no monitor is a conflict, not a queued check", func(t *testing.T) {
+		if rec := call("push-only"); rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409", rec.Code)
+		}
+		if len(sched.pool.jobs) != 0 {
+			t.Errorf("queued %d job(s) for a service with no monitor", len(sched.pool.jobs))
+		}
+	})
+
+	t.Run("disabled monitor is a conflict", func(t *testing.T) {
+		if _, err := db.Exec(`INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled) VALUES (?,?,?,?,?)`,
+			"paused", "http", "https://example.com", 60, 0); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		if rec := call("paused"); rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want 409", rec.Code)
+		}
+		if len(sched.pool.jobs) != 0 {
+			t.Errorf("queued %d job(s) for a disabled monitor", len(sched.pool.jobs))
+		}
+	})
+
+	t.Run("enabled monitor queues exactly one job", func(t *testing.T) {
+		if _, err := db.Exec(`INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled) VALUES (?,?,?,?,?)`,
+			"live", "tcp", "db.local:5432", 60, 1); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		rec := call("live")
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+		}
+		select {
+		case job := <-sched.pool.jobs:
+			if job.serviceName != "live" || job.monitorType != "tcp" || job.target != "db.local:5432" {
+				t.Errorf("job = %+v, want the stored monitor's type and target", job)
+			}
+		default:
+			t.Fatal("nothing was queued")
+		}
+	})
+}
+
+func TestIsProtectedEndpointCoversServiceLifecycle(t *testing.T) {
+	cases := []struct {
+		method, path string
+		want         bool
+	}{
+		{http.MethodDelete, "/api/services/foo", true},
+		{http.MethodPost, "/api/services/foo/check", true},
+		// Reads stay open, matching the documented purpose of the token.
+		{http.MethodGet, "/api/services", false},
+		{http.MethodGet, "/api/services/foo/uptime", false},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, c.path, nil)
+		if got := isProtectedEndpoint(req); got != c.want {
+			t.Errorf("isProtectedEndpoint(%s %s) = %v, want %v", c.method, c.path, got, c.want)
+		}
 	}
 }
