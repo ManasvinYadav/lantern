@@ -996,6 +996,137 @@
     .login-error::before { content: '\26A0'; font-size: 11px; }
     [hidden] { display: none !important; }
 
+    /* ---- Collapsible groups -----------------------------------------------
+       The grid becomes a column of sections, each with its own inner grid, so
+       cards keep their layout inside a group. Collapsing toggles display on
+       the body: no height animation, which would be a layout animation. */
+    .services-grid.grouped {
+      display: flex; flex-direction: column; gap: var(--space-5);
+    }
+    .service-group { display: flex; flex-direction: column; gap: var(--space-3); }
+    .service-group-header {
+      display: flex; align-items: center; gap: 8px;
+      background: transparent; border: none; padding: 4px 2px;
+      cursor: pointer; text-align: left; width: 100%;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border);
+      transition: color var(--duration-fast) var(--ease-out);
+    }
+    .service-group-header:hover { color: var(--text-primary); }
+    .service-group-header:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); border-radius: var(--radius-sm); }
+    .service-group-chevron {
+      flex-shrink: 0; color: var(--text-muted);
+      transform: rotate(90deg);
+      transition: transform var(--duration-fast) var(--ease-out);
+    }
+    .service-group.collapsed .service-group-chevron { transform: rotate(0deg); }
+    .service-group-name {
+      font-size: 12px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: inherit;
+    }
+    .service-group-count {
+      font-size: 11px; color: var(--text-muted);
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 1px 8px; margin-left: auto;
+      font-variant-numeric: tabular-nums;
+    }
+    .service-group-body {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: var(--space-4);
+    }
+    .service-group.collapsed .service-group-body { display: none; }
+    /* In list mode the section body stacks, matching .services-grid.list-view. */
+    .services-grid.list-view .service-group-body { display: flex; flex-direction: column; gap: var(--space-2); }
+    .services-grid.list-view .service-group.collapsed .service-group-body { display: none; }
+
+    /* ---- Command palette --------------------------------------------------
+       Anchored near the top rather than centred: the list grows downward, so
+       a centred dialog would shift the input as results come and go. */
+    .palette-overlay { align-items: flex-start; padding-top: 12vh; z-index: 1150; }
+    .palette {
+      max-width: 560px; width: 100%;
+      background: var(--login-surface);
+      border: 1px solid var(--login-border);
+      border-radius: var(--radius-md);
+      box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.8);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      opacity: 0; transform: scale(0.98);
+      transition: transform var(--duration-modal) var(--ease-out),
+                  opacity var(--duration-modal) var(--ease-out);
+    }
+    .palette-overlay.open .palette { opacity: 1; transform: scale(1); }
+    .palette-search {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .palette-search svg { color: var(--text-muted); flex-shrink: 0; }
+    .palette-input {
+      flex: 1; background: transparent; border: none; outline: none;
+      color: var(--text-primary); font-size: 15px; font-family: var(--font-sans);
+    }
+    .palette-input::placeholder { color: var(--text-muted); }
+    .palette-results { max-height: 46vh; overflow-y: auto; padding: 6px; }
+    .palette-empty { padding: 24px 16px; text-align: center; color: var(--text-muted); font-size: var(--text-sm); }
+    .palette-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: var(--radius-sm);
+      cursor: pointer; scroll-margin: 6px;
+    }
+    /* Selection is a background change only — no border, which would shift
+       every other row by a pixel as the cursor moves. */
+    .palette-item.selected { background: var(--panel-hover); }
+    .palette-item-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .palette-item-dot.up { background: var(--up); }
+    .palette-item-dot.down { background: var(--down); }
+    .palette-item-dot.degraded { background: var(--degraded); }
+    .palette-item-dot.maintenance { background: var(--maint); }
+    .palette-item-dot.unknown { background: var(--unknown); }
+    .palette-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .palette-item-name {
+      font-size: 13px; font-weight: 500; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .palette-item-meta {
+      font-size: 11px; color: var(--text-muted);
+      display: flex; align-items: center; gap: 6px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .palette-actions { display: flex; gap: 4px; flex-shrink: 0; }
+    /* Actions only render on the selected row, so the list stays legible. */
+    .palette-action {
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 11px; font-family: var(--font-sans);
+      padding: 3px 8px; border-radius: 4px; cursor: pointer;
+      transition: background-color var(--duration-fast) var(--ease-out),
+                  border-color var(--duration-fast) var(--ease-out),
+                  color var(--duration-fast) var(--ease-out);
+    }
+    .palette-action:hover:not(:disabled) { color: var(--text-primary); border-color: var(--accent); }
+    .palette-action:disabled { opacity: 0.4; cursor: not-allowed; }
+    .palette-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+    .palette-footer {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      padding: 9px 16px; border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--text-muted); flex-shrink: 0;
+    }
+    .palette-footer kbd {
+      font-family: var(--font-mono); font-size: 10px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 3px; padding: 1px 5px; color: var(--text-secondary);
+    }
+
+    /* Jump target. box-shadow and transform only: both composite, so this
+       never reflows the grid it lands in. */
+    @keyframes card-jump {
+      0%   { box-shadow: 0 0 0 0 var(--accent); }
+      35%  { box-shadow: 0 0 0 3px var(--accent); }
+      100% { box-shadow: 0 0 0 0 transparent; }
+    }
+    .service-card.jump-target { animation: card-jump 1.1s var(--ease-out); }
+
     /* ---- Account & Security ---------------------------------------------- */
     .field-optional {
       font-size: 10px; font-weight: 500; text-transform: uppercase;
@@ -1611,6 +1742,10 @@
           <button id="btnGrid" class="view-toggle-btn active">Grid</button>
           <button id="btnList" class="view-toggle-btn">List</button>
         </div>
+        <div class="view-toggle">
+          <button id="btnGroupToggle" class="view-toggle-btn" aria-pressed="false"
+                  title="Group services by their group name">Group</button>
+        </div>
         <span class="last-updated" id="lastUpdated">Updating...</span>
         <button class="btn hide-public" id="btnDiagnostics">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -2052,6 +2187,9 @@
       groupFilter: '',
       searchQuery: '',
       sourceFilter: 'all',
+      // Collapsible group sections. Off by default: the flat grid is what an
+      // ungrouped deployment should still see.
+      grouped: false,
       strips: {},
       diagFilter: '',
       activeService: null,
@@ -2613,6 +2751,137 @@
       if (first) first.focus();
     }
 
+    // Shared by the card menu and the command palette: 202 means queued, 409
+    // means there is nothing to probe (a pushed service has no monitor).
+    async function runServiceCheck(name) {
+      try {
+        const res = await authFetch(API.serviceCheck(name), { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 202) {
+          showToast(`Check queued for ${name}`, 'success');
+        } else if (res.status === 409) {
+          showToast(data.error || 'Nothing to check for this service', 'warning');
+        } else {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+      } catch (err) {
+        showToast(`Check failed: ${err.message}`, 'error');
+      }
+    }
+
+    // ---- Command palette ----------------------------------------------------
+    // Lantern has no tag concept, so "tags" here are groups — the same fields
+    // serviceMatchScore already ranks for the toolbar search, reused verbatim
+    // rather than reimplemented.
+    let paletteResults = [];
+    let paletteIndex = 0;
+
+    function paletteOpen() {
+      return document.getElementById('paletteOverlay').classList.contains('open');
+    }
+
+    function openPalette() {
+      if (isPublic || paletteOpen()) return;
+      const input = document.getElementById('paletteInput');
+      if (input) input.value = '';
+      paletteIndex = 0;
+      renderPalette();
+      openOverlay('paletteOverlay');
+      requestAnimationFrame(() => { if (input) input.focus(); });
+    }
+
+    function closePalette() {
+      if (paletteOpen()) closeOverlay('paletteOverlay');
+    }
+
+    function paletteQuery() {
+      const input = document.getElementById('paletteInput');
+      return input ? input.value.trim() : '';
+    }
+
+    function renderPalette() {
+      const box = document.getElementById('paletteResults');
+      if (!box) return;
+      const q = paletteQuery();
+      const all = state.services || [];
+
+      paletteResults = q
+        ? all.map(svc => ({ svc, score: serviceMatchScore(svc, q) }))
+             .filter(x => x.score >= 0)
+             .sort((a, b) => b.score - a.score)
+             .map(x => x.svc)
+        : all.slice(0, 12);   // no query: a short recent list, not all 200
+
+      if (!paletteResults.length) {
+        box.innerHTML = `<div class="palette-empty">No services match \u201C${escapeHtml(q)}\u201D.</div>`;
+        return;
+      }
+      if (paletteIndex >= paletteResults.length) paletteIndex = paletteResults.length - 1;
+      if (paletteIndex < 0) paletteIndex = 0;
+
+      box.innerHTML = paletteResults.map((s, i) => {
+        const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
+        const stat = s.maintenance ? 'maintenance' : (s.status || 'unknown');
+        const meta = [stat, s.group_name || null, s.source || 'host']
+          .filter(Boolean).map(escapeHtml).join(' \u00B7 ');
+        const selected = i === paletteIndex;
+        const actions = selected ? `
+            <div class="palette-actions">
+              <button type="button" class="palette-action" data-palette-action="open" data-svc="${escapeHtml(s.service_name)}">Open</button>
+              <button type="button" class="palette-action" data-palette-action="check" data-svc="${escapeHtml(s.service_name)}"${s.monitor_type ? '' : ' disabled title="No monitor configured"'}>Check</button>
+              <button type="button" class="palette-action" data-palette-action="badge" data-svc="${escapeHtml(s.service_name)}">Badge</button>
+              <button type="button" class="palette-action" data-palette-action="edit" data-svc="${escapeHtml(s.service_name)}">Edit</button>
+            </div>` : '';
+        return `
+          <div class="palette-item${selected ? ' selected' : ''}" role="option"
+               aria-selected="${selected}" data-index="${i}" data-svc="${escapeHtml(s.service_name)}">
+            <span class="palette-item-dot ${cls}"></span>
+            <span class="palette-item-main">
+              <span class="palette-item-name">${escapeHtml(s.service_name)}</span>
+              <span class="palette-item-meta">${meta}</span>
+            </span>${actions}
+          </div>`;
+      }).join('');
+
+      const sel = box.querySelector('.palette-item.selected');
+      if (sel) sel.scrollIntoView({ block: 'nearest' });
+    }
+
+    function movePaletteSelection(delta) {
+      if (!paletteResults.length) return;
+      paletteIndex = (paletteIndex + delta + paletteResults.length) % paletteResults.length;
+      renderPalette();
+    }
+
+    // Jump: close, scroll the card into view, and flash it. The card may be
+    // filtered out of the grid entirely, so clear the filters first —
+    // otherwise "jump" silently does nothing.
+    function jumpToCard(name) {
+      closePalette();
+      const grid = document.getElementById('servicesGrid');
+      let card = grid && grid.querySelector(`.service-card[data-service="${CSS.escape(name)}"]`);
+      if (!card) {
+        resetFilters();
+        card = grid && grid.querySelector(`.service-card[data-service="${CSS.escape(name)}"]`);
+      }
+      if (!card) { showToast(`${name} is not on this page`, 'warning'); return; }
+      const group = card.closest('.service-group');
+      if (group && group.classList.contains('collapsed')) setGroupCollapsed(group.dataset.group, false);
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.remove('jump-target');
+      void card.offsetWidth;
+      card.classList.add('jump-target');
+      setTimeout(() => card.classList.remove('jump-target'), 1200);
+    }
+
+    async function runPaletteAction(action, name) {
+      if (!name) return;
+      if (action === 'open')  { jumpToCard(name); return; }
+      if (action === 'badge') { closePalette(); openBadgeModal(name); return; }
+      if (action === 'edit')  { closePalette(); openMonitorModal(name); return; }
+      if (action === 'check') { closePalette(); await runServiceCheck(name); return; }
+    }
+
     async function handleCardMenuAction(action) {
       const name = cardMenuService;
       if (!name) return;
@@ -2633,19 +2902,7 @@
 
       if (action === 'check') {
         closeCardMenu();
-        try {
-          const res = await authFetch(API.serviceCheck(name), { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (res.status === 202) {
-            showToast(`Check queued for ${name}`, 'success');
-          } else if (res.status === 409) {
-            showToast(data.error || 'Nothing to check for this service', 'warning');
-          } else {
-            throw new Error(data.error || `HTTP ${res.status}`);
-          }
-        } catch (err) {
-          showToast(`Check failed: ${err.message}`, 'error');
-        }
+        await runServiceCheck(name);
         return;
       }
 
@@ -3277,7 +3534,20 @@
       // View Toggle
       const btnGrid = document.getElementById('btnGrid');
       const btnList = document.getElementById('btnList');
+      const btnGroup = document.getElementById('btnGroupToggle');
       const gridEl = document.getElementById('servicesGrid');
+
+      // Grouping is a class on the same container as the view toggle, and a
+      // full re-render — the DOM shape genuinely changes (cards move into
+      // section bodies), unlike grid/list, which is class-only.
+      function setGrouped(on) {
+        state.grouped = !!on;
+        gridEl.classList.toggle('grouped', state.grouped);
+        btnGroup.classList.toggle('active', state.grouped);
+        btnGroup.setAttribute('aria-pressed', state.grouped ? 'true' : 'false');
+        localStorage.setItem('lantern_grouped', state.grouped ? '1' : '0');
+        renderServices();
+      }
 
       function setView(view) {
         if (view === 'list') {
@@ -3294,6 +3564,18 @@
       btnGrid.addEventListener('click', () => setView('grid'));
       btnList.addEventListener('click', () => setView('list'));
       setView(localStorage.getItem('lantern_view') || 'grid');
+
+      btnGroup.addEventListener('click', () => setGrouped(!state.grouped));
+      setGrouped(localStorage.getItem('lantern_grouped') === '1');
+
+      // Collapse/expand, delegated so sections rendered later need no rebind.
+      gridEl.addEventListener('click', (e) => {
+        const header = e.target.closest && e.target.closest('.service-group-header');
+        if (!header) return;
+        const section = header.closest('.service-group');
+        if (!section) return;
+        setGroupCollapsed(section.dataset.group, !section.classList.contains('collapsed'));
+      });
 
       // ---- Login gate ------------------------------------------------------
       const loginForm = document.getElementById('loginForm');
@@ -3382,30 +3664,66 @@
       // the user is already typing in.
       document.addEventListener('keydown', (e) => {
         const input = document.getElementById('serviceSearchInput');
-        if (!input) return;
         const t = e.target;
         const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
           || t.tagName === 'SELECT' || t.isContentEditable);
 
+        // Cmd/Ctrl+K and "/" open the palette. Guarded on overlayStack so they
+        // do nothing behind the login wall or any other dialog.
         if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
-          if (overlayStack.length) return;
+          if (isPublic || overlayStack.length) return;
           e.preventDefault();
-          input.focus();
-          input.select();
+          openPalette();
           return;
         }
         if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          if (overlayStack.length || cardMenuService) return;
+          if (isPublic || overlayStack.length || cardMenuService) return;
           e.preventDefault();
-          input.focus();
+          openPalette();
           return;
         }
-        if (e.key === 'Escape' && document.activeElement === input) {
+        if (e.key === 'Escape' && input && document.activeElement === input) {
           e.preventDefault();
           clearServiceSearch();
           input.blur();
         }
       });
+
+      // ---- Palette navigation ---------------------------------------------
+      const paletteInput = document.getElementById('paletteInput');
+      if (paletteInput) {
+        paletteInput.addEventListener('input', () => { paletteIndex = 0; renderPalette(); });
+        paletteInput.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteSelection(1); return; }
+          if (e.key === 'ArrowUp')   { e.preventDefault(); movePaletteSelection(-1); return; }
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const svc = paletteResults[paletteIndex];
+            if (svc) jumpToCard(svc.service_name);
+          }
+        });
+      }
+
+      const paletteBox = document.getElementById('paletteResults');
+      if (paletteBox) {
+        paletteBox.addEventListener('click', (e) => {
+          const action = e.target.closest('[data-palette-action]');
+          if (action) {
+            if (!action.disabled) runPaletteAction(action.dataset.paletteAction, action.dataset.svc);
+            return;
+          }
+          const row = e.target.closest('.palette-item');
+          if (row) jumpToCard(row.dataset.svc);
+        });
+        // Hovering moves the selection, so the mouse and the keyboard agree
+        // on which row the actions belong to.
+        paletteBox.addEventListener('mousemove', (e) => {
+          const row = e.target.closest('.palette-item');
+          if (!row) return;
+          const i = Number(row.dataset.index);
+          if (Number.isInteger(i) && i !== paletteIndex) { paletteIndex = i; renderPalette(); }
+        });
+      }
 
       // Uptime Range Selector Tabs
       document.querySelectorAll('#uptimeRangeTabs .uptime-range-btn').forEach(btn => {
@@ -4481,29 +4799,45 @@
         return;
       }
 
-      // Placeholder chrome — the six skeleton cards from renderSkeletons() and
-      // the empty-state block — is not part of the reconcile set below, which
-      // only tracks .service-card nodes. Drop it explicitly or it survives
-      // forever, pinned above the real cards, and its presence in
-      // grid.children also throws off the positional insert at the end of
-      // the loop.
-      for (const node of Array.from(grid.children)) {
+      if (state.grouped) {
+        reconcileGroups(grid, filtered);
+      } else {
+        // Ungrouped: cards sit directly in the grid, so a section left over
+        // from grouped mode is placeholder chrome like any skeleton.
+        purgeNonCards(grid);
+        reconcileCards(grid, filtered);
+      }
+    }
+
+    // Placeholder chrome — the six skeleton cards from renderSkeletons(), the
+    // empty-state block, group sections from a previous mode — is not part of
+    // the reconcile set, which only tracks .service-card nodes. Drop it
+    // explicitly or it survives forever, pinned above the real cards, and its
+    // presence in container.children throws off the positional insert.
+    function purgeNonCards(container) {
+      for (const node of Array.from(container.children)) {
         if (!node.classList.contains('service-card')) node.remove();
       }
+    }
 
-      const existingCards = Array.from(grid.querySelectorAll('.service-card'));
+    // Reconciles `list` into `container` in order, reusing existing card nodes
+    // so live heartbeat animations survive a re-render. Container-relative
+    // rather than grid-relative, which is what lets grouped mode reuse it per
+    // section instead of duplicating the whole loop.
+    function reconcileCards(container, list) {
+      const existingCards = Array.from(container.children).filter(n => n.classList.contains('service-card'));
       const existingMap = new Map();
       existingCards.forEach(c => existingMap.set(c.dataset.service, c));
 
-      const filteredNames = new Set(filtered.map(s => s.service_name));
+      const wanted = new Set(list.map(s => s.service_name));
       for (const [name, node] of existingMap) {
-        if (!filteredNames.has(name)) {
+        if (!wanted.has(name)) {
           node.remove();
           existingMap.delete(name);
         }
       }
 
-      filtered.forEach((s, index) => {
+      list.forEach((s, index) => {
         try {
           const cls = s.maintenance ? 'maintenance' : (s.status || 'unknown');
           const statText = s.maintenance ? 'MAINT' : (s.status || 'UNKNOWN').toUpperCase();
@@ -4616,14 +4950,94 @@
 
           // Position every card, new or reused. Ranked search order has to
           // apply to freshly created cards too, which the old appendChild
-          // dropped to the bottom regardless of score. grid.children holds
-          // nothing but cards by this point, so index lines up 1:1 with
-          // filtered; a null anchor appends.
-          const at = grid.children[index];
-          if (at !== card) grid.insertBefore(card, at || null);
+          // dropped to the bottom regardless of score. The container holds
+          // nothing but cards by this point, so index lines up 1:1 with the
+          // list; a null anchor appends.
+          const at = container.children[index];
+          if (at !== card) container.insertBefore(card, at || null);
         } catch (err) {
           console.error("Failed to render service:", s.service_name, err);
         }
+      });
+    }
+
+    // ---- Collapsible groups --------------------------------------------------
+
+    function groupKeyFor(svc) { return (svc.group_name || '').trim() || 'Ungrouped'; }
+
+    function collapsedGroups() {
+      try { return JSON.parse(localStorage.getItem('lantern_collapsed_groups') || '[]'); }
+      catch (e) { return []; }
+    }
+
+    function isGroupCollapsed(name) { return collapsedGroups().indexOf(name) !== -1; }
+
+    function setGroupCollapsed(name, collapsed) {
+      const set = new Set(collapsedGroups());
+      if (collapsed) set.add(name); else set.delete(name);
+      localStorage.setItem('lantern_collapsed_groups', JSON.stringify(Array.from(set)));
+      const section = document.querySelector(`.service-group[data-group="${CSS.escape(name)}"]`);
+      if (section) {
+        section.classList.toggle('collapsed', collapsed);
+        const btn = section.querySelector('.service-group-header');
+        if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      }
+    }
+
+    // Two-level reconcile: sections at the top, cards within each. Sections are
+    // reused across renders for the same reason cards are — rebuilding them
+    // would drop every heartbeat bar underneath.
+    function reconcileGroups(grid, list) {
+      // Ungrouped sorts last; everything else keeps first-appearance order, so
+      // the sections do not reshuffle on every poll.
+      const order = [];
+      const byGroup = new Map();
+      list.forEach(svc => {
+        const key = groupKeyFor(svc);
+        if (!byGroup.has(key)) { byGroup.set(key, []); order.push(key); }
+        byGroup.get(key).push(svc);
+      });
+      order.sort((a, b) => (a === 'Ungrouped') - (b === 'Ungrouped'));
+
+      for (const node of Array.from(grid.children)) {
+        const isSection = node.classList.contains('service-group');
+        if (!isSection || !byGroup.has(node.dataset.group)) node.remove();
+      }
+
+      const existing = new Map();
+      Array.from(grid.children).forEach(n => existing.set(n.dataset.group, n));
+
+      order.forEach((key, index) => {
+        let section = existing.get(key);
+        if (!section) {
+          section = document.createElement('section');
+          section.className = 'service-group';
+          section.dataset.group = key;
+          section.innerHTML = `
+            <button type="button" class="service-group-header" aria-expanded="true">
+              <svg class="service-group-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <span class="service-group-name"></span>
+              <span class="service-group-count"></span>
+            </button>
+            <div class="service-group-body"></div>`;
+          section.querySelector('.service-group-name').innerText = key;
+        }
+        const count = section.querySelector('.service-group-count');
+        const n = byGroup.get(key).length;
+        const countText = String(n);
+        if (count.innerText !== countText) count.innerText = countText;
+        section.querySelector('.service-group-header')
+               .setAttribute('aria-label', `${key}, ${n} service${n === 1 ? '' : 's'}`);
+
+        const collapsed = isGroupCollapsed(key);
+        section.classList.toggle('collapsed', collapsed);
+        section.querySelector('.service-group-header')
+               .setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+
+        const at = grid.children[index];
+        if (at !== section) grid.insertBefore(section, at || null);
+
+        reconcileCards(section.querySelector('.service-group-body'), byGroup.get(key));
       });
     }
 
@@ -5125,6 +5539,15 @@
     function closeOverlay(id) {
       const el = document.getElementById(id);
       if (el) {
+        // Focus has to leave before the layer is hidden. A closed overlay is
+        // only transparent and non-interactive, not removed, so a control
+        // inside it stays focusable — and whatever the user typed next would
+        // be swallowed by an input they cannot see. That is exactly what made
+        // "/" stop opening the palette after the palette had been dismissed
+        // once: the keystroke was landing in the hidden palette input.
+        // restoreFocus below cannot fix it on its own, because focus() on a
+        // non-focusable element (document.body, usually) is a no-op.
+        if (el.contains(document.activeElement)) document.activeElement.blur();
         el.classList.remove('open');
         el.setAttribute('aria-hidden', 'true');
       }
@@ -5329,6 +5752,25 @@
           <button type="button" class="btn" data-close-overlay="monitorModalOverlay">Cancel</button>
           <button type="button" class="btn primary" id="btnSaveMonitor">Save Monitor</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Command palette. hide-public: every action it offers is an admin one. -->
+  <div class="modal-overlay palette-overlay hide-public" id="paletteOverlay" aria-hidden="true">
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="palette-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" class="palette-input" id="paletteInput" placeholder="Search services by name, group, status or source\u2026"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               role="combobox" aria-expanded="true" aria-controls="paletteResults" aria-autocomplete="list" />
+      </div>
+      <div class="palette-results" id="paletteResults" role="listbox" aria-label="Results"></div>
+      <div class="palette-footer">
+        <span><kbd>&#8593;</kbd><kbd>&#8595;</kbd> navigate</span>
+        <span><kbd>&#8629;</kbd> jump to card</span>
+        <span><kbd>Tab</kbd> actions</span>
+        <span><kbd>Esc</kbd> close</span>
       </div>
     </div>
   </div>
