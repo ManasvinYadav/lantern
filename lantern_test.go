@@ -2,9 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -505,5 +507,103 @@ func TestIsProtectedEndpointCoversServiceLifecycle(t *testing.T) {
 		if got := isProtectedEndpoint(req); got != c.want {
 			t.Errorf("isProtectedEndpoint(%s %s) = %v, want %v", c.method, c.path, got, c.want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Service source classification and history latency
+// ---------------------------------------------------------------------------
+
+func TestServiceSourcePrecedence(t *testing.T) {
+	// Package-level registry: restore it so ordering between tests cannot matter.
+	t.Cleanup(func() { setDockerDiscovered(map[string]struct{}{}) })
+	setDockerDiscovered(map[string]struct{}{"in-docker": {}, "both": {}})
+
+	cases := []struct {
+		name, service, monitorType, want string
+	}{
+		{"an explicit probe wins over discovery", "both", "http", "monitor"},
+		{"probe on a service discovery never saw", "solo", "tcp", "monitor"},
+		{"discovered container with no probe", "in-docker", "", "docker"},
+		{"anything else is a pusher", "systemd-unit", "", "host"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := serviceSource(c.service, c.monitorType); got != c.want {
+				t.Errorf("serviceSource(%q, %q) = %q, want %q", c.service, c.monitorType, got, c.want)
+			}
+		})
+	}
+}
+
+// A failed discovery pass must not blank the registry, or every container would
+// briefly report as host-sourced.
+func TestDockerDiscoveredSnapshotIsReplacedWholesale(t *testing.T) {
+	t.Cleanup(func() { setDockerDiscovered(map[string]struct{}{}) })
+
+	setDockerDiscovered(map[string]struct{}{"a": {}, "b": {}})
+	if !isDockerDiscovered("a") || !isDockerDiscovered("b") {
+		t.Fatal("seeded names should be present")
+	}
+	// A later pass that no longer sees "b" must drop it.
+	setDockerDiscovered(map[string]struct{}{"a": {}})
+	if !isDockerDiscovered("a") {
+		t.Error("a should still be discovered")
+	}
+	if isDockerDiscovered("b") {
+		t.Error("b vanished from the pass and should no longer read as docker")
+	}
+}
+
+func TestServiceHistoryReturnsLatency(t *testing.T) {
+	db := newTestDB(t)
+
+	const svc = "history-latency-probe"
+	rows := []struct {
+		status  string
+		msg     string
+		ts      string
+		latency int64
+	}{
+		{"up", "first", "2026-08-26T00:00:00Z", 12},
+		{"down", "second", "2026-08-26T00:01:00Z", 940},
+		{"up", "third", "2026-08-26T00:02:00Z", 0},
+	}
+	for _, r := range rows {
+		if _, err := db.Exec(
+			`INSERT INTO status_events (service_name, status, message, timestamp, latency_ms) VALUES (?,?,?,?,?)`,
+			svc, r.status, r.msg, r.ts, r.latency); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	r := mux.NewRouter()
+	r.Handle("/api/services/{name}/history", handleGetServiceHistory(db)).Methods(http.MethodGet)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/services/"+svc+"/history?limit=90", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp ServiceHistoryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Events) != 3 {
+		t.Fatalf("events = %d, want 3", len(resp.Events))
+	}
+
+	// Newest first, matching the handler's ORDER BY.
+	want := []int64{0, 940, 12}
+	for i, w := range want {
+		if resp.Events[i].LatencyMs != w {
+			t.Errorf("event %d latency_ms = %d, want %d", i, resp.Events[i].LatencyMs, w)
+		}
+	}
+
+	// The field must be present on the wire, not merely zero-valued in the struct.
+	if !strings.Contains(rec.Body.String(), `"latency_ms"`) {
+		t.Error("latency_ms is missing from the serialised response")
 	}
 }

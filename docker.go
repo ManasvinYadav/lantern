@@ -13,10 +13,61 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 )
+
+// ---------------------------------------------------------------------------
+// Discovery registry
+//
+// Records which service names the most recent discovery pass saw, so a
+// service's source can be reported without a Docker socket round-trip.
+// buildServiceSummary runs on every WebSocket broadcast, and handleGetServices
+// runs per service on every poll, so this lookup has to stay O(1) and cheap to
+// lock — calling findDockerContainer from either would be a real regression.
+// ---------------------------------------------------------------------------
+
+var (
+	dockerDiscoveredMu sync.RWMutex
+	dockerDiscovered   = map[string]struct{}{}
+)
+
+// setDockerDiscovered replaces the registry wholesale at the end of a
+// successful pass, so a container that disappears between polls stops being
+// reported as docker-sourced. A failed pass returns before calling this, which
+// leaves the previous snapshot in place rather than blanking every service.
+func setDockerDiscovered(names map[string]struct{}) {
+	dockerDiscoveredMu.Lock()
+	dockerDiscovered = names
+	dockerDiscoveredMu.Unlock()
+}
+
+func isDockerDiscovered(name string) bool {
+	dockerDiscoveredMu.RLock()
+	defer dockerDiscoveredMu.RUnlock()
+	_, ok := dockerDiscovered[name]
+	return ok
+}
+
+// serviceSource classifies where a service's status comes from:
+//
+//	"monitor" — Lantern actively probes it (it has an enabled active_monitors row)
+//	"docker"  — Docker discovery saw it on the most recent pass
+//	"host"    — anything else, i.e. something pushing to POST /api/status
+//
+// Monitor wins over docker: if an operator has configured an explicit probe for
+// a container, that probe is the authoritative source of its status.
+func serviceSource(serviceName, monitorType string) string {
+	if monitorType != "" {
+		return "monitor"
+	}
+	if isDockerDiscovered(serviceName) {
+		return "docker"
+	}
+	return "host"
+}
 
 const dockerSocketPath = "/var/run/docker.sock"
 
@@ -722,6 +773,7 @@ func dockerDiscoveryPass(client *http.Client, db *sql.DB, cfg *Config, dispatche
 
 	now := time.Now().UTC()
 	recorded, skipped := 0, 0
+	seen := make(map[string]struct{}, len(containers))
 	for _, c := range containers {
 		if dockerDiscoveryIgnored(c.Labels) {
 			skipped++
@@ -731,6 +783,9 @@ func dockerDiscoveryPass(client *http.Client, db *sql.DB, cfg *Config, dispatche
 		if name == "" {
 			continue
 		}
+		// Registered before the write is attempted: a transient DB error
+		// should not make a container look host-sourced for a whole interval.
+		seen[name] = struct{}{}
 		status, message := dockerStatusFor(c.State, c.Status)
 		if _, err := ingestStatusEvent(db, cfg, dispatcher, hub, name, status, message, now, latencyMs); err != nil {
 			log.Printf("docker discovery: failed to record %s: %v", name, err)
@@ -738,6 +793,8 @@ func dockerDiscoveryPass(client *http.Client, db *sql.DB, cfg *Config, dispatche
 		}
 		recorded++
 	}
+
+	setDockerDiscovered(seen)
 
 	log.Printf("docker discovery: recorded %d container(s), ignored %d, daemon query %dms", recorded, skipped, latencyMs)
 }

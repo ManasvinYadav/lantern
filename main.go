@@ -443,6 +443,9 @@ type ServiceSummary struct {
 	// MonitorType is "" for push-based services, or "http"/"tcp"/"ping" when
 	// Lantern is actively checking this service itself (Phase 2).
 	MonitorType string `json:"monitor_type"`
+	// Source is where this service's status comes from: "monitor", "docker"
+	// or "host". Derived, not stored — see serviceSource in docker.go.
+	Source string `json:"source"`
 }
 
 // StatusEvent is a single history entry returned by GET /api/services/{name}/history.
@@ -451,6 +454,10 @@ type StatusEvent struct {
 	Status    string `json:"status"`
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
+	// LatencyMs is how long the check took. The column has existed on
+	// status_events since the heartbeat work, but this endpoint never
+	// selected it, so history was silently latency-free.
+	LatencyMs int64 `json:"latency_ms"`
 }
 
 // HeartbeatBeat is one entry in a service's live heartbeat bar: either a
@@ -676,6 +683,7 @@ ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Time
 	// the last 30 checks), not the 30-day average. It is what the card's
 	// heartbeat header shows; uptime_7d / uptime_30d keep their old meaning.
 	s.UptimePercent = windowUptimePct(s.History)
+	s.Source = serviceSource(s.ServiceName, s.MonitorType)
 
 	return s, true
 }
@@ -1114,6 +1122,7 @@ ORDER BY s.service_name ASC;`)
 			}
 			s.LastSeen = s.Timestamp
 			s.Maintenance = maint == 1
+			s.Source = serviceSource(s.ServiceName, s.MonitorType)
 
 			// Calculate Stale
 			t, err := time.Parse(time.RFC3339, s.Timestamp)
@@ -1170,7 +1179,7 @@ func handleGetServiceHistory(db *sql.DB) http.HandlerFunc {
 		}
 
 		rows, err := db.Query(`
-SELECT id, status, message, timestamp
+SELECT id, status, message, timestamp, COALESCE(latency_ms, 0)
 FROM status_events
 WHERE service_name = ?
 ORDER BY timestamp DESC, id DESC
@@ -1186,7 +1195,7 @@ LIMIT ? OFFSET ?`, name, limit, offset)
 		for rows.Next() {
 			var e StatusEvent
 			var msg sql.NullString
-			if err := rows.Scan(&e.ID, &e.Status, &msg, &e.Timestamp); err != nil {
+			if err := rows.Scan(&e.ID, &e.Status, &msg, &e.Timestamp, &e.LatencyMs); err != nil {
 				log.Printf("handleGetServiceHistory scan error: %v", err)
 				continue
 			}
