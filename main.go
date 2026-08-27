@@ -632,7 +632,7 @@ var wsExtraAllowedOrigins = func() map[string]bool {
 //
 // A missing Origin header is allowed: browsers always send one on a WebSocket
 // handshake, so an absent header means a non-browser client — curl, a script,
-// n8n — which is not what cross-site request forgery is about.
+// a CI job — which is not what cross-site request forgery is about.
 func wsOriginAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

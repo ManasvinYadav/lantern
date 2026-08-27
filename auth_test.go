@@ -505,7 +505,7 @@ func TestFirstTimeSetupNeedsNoCurrentPassword(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Back-compat: scripts and n8n must keep working under the gate
+// Back-compat: scripts and CI must keep working under the gate
 // ---------------------------------------------------------------------------
 
 func TestBearerAdminTokenStillWorksUnderTheGate(t *testing.T) {

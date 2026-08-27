@@ -154,7 +154,7 @@ an existing deployment out of itself.
 Per-service scoped tokens (issued into the `api_tokens` table) can push status
 and use Docker controls for their own service name only, and are rejected with
 `403` if used against a different service. Both token types keep working under
-the login gate, so scripts, n8n and CI need no changes.
+the login gate, so existing scripts, automations and CI need no changes.
 
 ### Always open
 

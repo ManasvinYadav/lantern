@@ -131,7 +131,7 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 		origin string
 		want   bool
 	}{
-		{"no Origin header at all (curl, scripts, n8n)", "lantern.local:7654", "", true},
+		{"no Origin header at all (curl, scripts, CI jobs)", "lantern.local:7654", "", true},
 		{"same host", "lantern.local:7654", "http://lantern.local:7654", true},
 		{"same host over https", "lantern.local", "https://lantern.local", true},
 		{"same host, different case", "Lantern.Local:7654", "http://lantern.local:7654", true},

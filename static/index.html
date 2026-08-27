@@ -2977,7 +2977,8 @@
     // rules out a library, and the corpus is a few dozen short strings. Exact
     // prefix beats substring beats scattered subsequence; within a subsequence,
     // characters landing on a word boundary or continuing a run score higher,
-    // so "nb" ranks "netbird" above "n8n-backup".
+    // so "pg" ranks "pihole-gateway" (both letters on a boundary) above
+    // "postgres" (only the first).
     function fuzzyScore(needle, haystack) {
       const n = (needle || '').toLowerCase();
       const h = (haystack || '').toLowerCase();

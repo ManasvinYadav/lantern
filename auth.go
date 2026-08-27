@@ -428,7 +428,7 @@ func authExemptPath(p string) bool {
 // authMiddleware resolves a request to admin, service-scoped, or anonymous.
 //
 // Order is cheapest-and-commonest first: the browser's session cookie, then
-// the Bearer tokens that scripts and n8n use, then Basic Auth. Every
+// the Bearer tokens that scripts and CI use, then Basic Auth. Every
 // credential comparison is constant-time or bcrypt; none uses ==.
 func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

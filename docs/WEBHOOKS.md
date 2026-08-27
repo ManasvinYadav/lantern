@@ -32,7 +32,8 @@ LANTERN_WEBHOOK_GOTIFY=https://gotify.yourdomain.com/message?token=<YOUR_APP_TOK
 ```
 
 ### 4. Generic Webhook
-If you use n8n, Zapier, or a custom backend, Lantern can send standard JSON `POST` requests.
+For a custom backend, or any automation platform that accepts an incoming webhook,
+Lantern can send standard JSON `POST` requests.
 ```env
 LANTERN_WEBHOOK_GENERIC=https://your-domain.com/webhook/lantern
 ```
