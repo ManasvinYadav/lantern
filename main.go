@@ -4,14 +4,17 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"bytes"
@@ -28,7 +31,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.59.1"
+const version = "0.60.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -328,6 +331,19 @@ func isProtectedEndpoint(r *http.Request) bool {
 	}
 
 	switch {
+	// Credential management. Omitted here originally, which let an anonymous
+	// caller PUT /api/auth/credentials on a token-mode deployment, perform
+	// "first-time setup", and walk away with an admin session cookie.
+	case path == "/api/auth/credentials":
+		return true
+	// A full database snapshot: credential hash, session hashes, per-service
+	// API tokens, and webhook URLs. Never a read that should be open.
+	case path == "/api/backup":
+		return true
+	// Reads back the configured webhook URLs in full. A Discord webhook URL
+	// and a Telegram bot URL *are* the credential, so this GET leaks secrets.
+	case path == "/api/webhooks" && method == http.MethodGet:
+		return true
 	case path == "/api/status" && method == http.MethodPost:
 		return true
 	case path == "/api/diagnostics" && method == http.MethodPost:
@@ -473,10 +489,22 @@ type wsClient struct {
 type wsHub struct {
 	mu      sync.RWMutex
 	clients map[*wsClient]bool
+
+	// public is the unauthenticated hub behind /api/public/ws, nil on the
+	// public hub itself. Both sockets used to share one hub, so the session
+	// gate on /ws bought nothing: an anonymous client could open
+	// /api/public/ws and receive the identical broadcast. They are now
+	// separate fan-out sets fed different payloads, which also means a field
+	// added to the gated dashboard feed cannot leak onto the open one by
+	// default — see wsPublicMessage.
+	public *wsHub
 }
 
 func newWSHub() *wsHub {
-	return &wsHub{clients: make(map[*wsClient]bool)}
+	return &wsHub{
+		clients: make(map[*wsClient]bool),
+		public:  &wsHub{clients: make(map[*wsClient]bool)},
+	}
 }
 
 func (h *wsHub) register(c *wsClient) {
@@ -603,6 +631,51 @@ type wsHeartbeatMessage struct {
 	NewBeat     HeartbeatBeat `json:"new_beat"`
 }
 
+// wsPublicService is the reduced view broadcast on /api/public/ws. It mirrors
+// what GET /api/public/services already returns for the public /status page,
+// minus the heartbeat history that page never renders (the trend container is
+// hide-public). It is spelled out field by field rather than reusing
+// ServiceSummary so that anything added to the gated feed has to be added here
+// deliberately before it reaches anonymous listeners.
+type wsPublicService struct {
+	ServiceName   string  `json:"service_name"`
+	Status        string  `json:"status"`
+	Message       string  `json:"message"`
+	Timestamp     string  `json:"timestamp"`
+	LastSeen      string  `json:"last_seen"`
+	Stale         bool    `json:"stale"`
+	Maintenance   bool    `json:"maintenance"`
+	GroupName     string  `json:"group_name"`
+	Uptime7d      float64 `json:"uptime_7d"`
+	Uptime30d     float64 `json:"uptime_30d"`
+	UptimePercent float64 `json:"uptime_percent"`
+	MonitorType   string  `json:"monitor_type"`
+	Source        string  `json:"source"`
+}
+
+type wsPublicMessage struct {
+	Type    string          `json:"type"`
+	Service wsPublicService `json:"service"`
+}
+
+func publicViewOf(s ServiceSummary) wsPublicService {
+	return wsPublicService{
+		ServiceName:   s.ServiceName,
+		Status:        s.Status,
+		Message:       s.Message,
+		Timestamp:     s.Timestamp,
+		LastSeen:      s.LastSeen,
+		Stale:         s.Stale,
+		Maintenance:   s.Maintenance,
+		GroupName:     s.GroupName,
+		Uptime7d:      s.Uptime7d,
+		Uptime30d:     s.Uptime30d,
+		UptimePercent: s.UptimePercent,
+		MonitorType:   s.MonitorType,
+		Source:        s.Source,
+	}
+}
+
 // buildServiceSummary assembles the same shape returned by GET /api/services
 // for a single service, for use in WebSocket broadcasts.
 func buildServiceSummary(db *sql.DB, cfg *Config, name string) (ServiceSummary, bool) {
@@ -679,6 +752,20 @@ func broadcastServiceUpdate(hub *wsHub, db *sql.DB, cfg *Config, name string) {
 		return
 	}
 	hub.broadcast(body)
+
+	// The anonymous socket gets the reduced envelope only, and no heartbeat
+	// delta at all — the public page has no heartbeat bar to slide it into.
+	if hub.public != nil {
+		pubBody, err := json.Marshal(wsPublicMessage{
+			Type:    "status_update",
+			Service: publicViewOf(summary),
+		})
+		if err != nil {
+			log.Printf("ws: failed to marshal public broadcast message: %v", err)
+			return
+		}
+		hub.public.broadcast(pubBody)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2021,7 +2108,9 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	// --- WebSocket routes (registered outside jsonMiddleware; the upgrade
 	// handshake writes its own headers via Hijack) ---
 	r.Handle("/ws", handleWS(hub)).Methods(http.MethodGet)
-	r.Handle("/api/public/ws", handleWS(hub)).Methods(http.MethodGet)
+	// Deliberately a different hub, not the same one: /ws is gated and
+	// /api/public/ws is not, so they must not share a payload.
+	r.Handle("/api/public/ws", handleWS(hub.public)).Methods(http.MethodGet)
 
 	// --- Prometheus metrics (plain text, not JSON — registered outside
 	// the /api subrouter's jsonMiddleware) ---
@@ -2042,7 +2131,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	r.Handle("/api/auth/session", handleGetAuthSession(db, cfg)).Methods(http.MethodGet)
 	r.Handle("/api/auth/login", handlePostLogin(db, loginLimiter)).Methods(http.MethodPost)
 	r.Handle("/api/auth/logout", handlePostLogout(db)).Methods(http.MethodPost)
-	r.Handle("/api/auth/credentials", handlePutCredentials(db)).Methods(http.MethodPut)
+	r.Handle("/api/auth/credentials", handlePutCredentials(db, cfg)).Methods(http.MethodPut)
 
 	api := r.PathPrefix("/api").Subrouter()
 	api.Use(jsonMiddleware)
@@ -2089,8 +2178,11 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	publicApi.Use(jsonMiddleware)
 	publicApi.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	publicApi.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
-	publicApi.Handle("/services/{name}/metadata", handleGetServiceMetadata(db)).Methods(http.MethodGet)
 	publicApi.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
+	// /services/{name}/metadata is deliberately absent. It returns the
+	// container image, its IP, its published ports and its host mount paths —
+	// the same class of container internals isProtectedEndpoint gates
+	// /docker/* for. The gated /api/services/{name}/metadata still serves it.
 
 	// --- Static / SPA ---
 	r.PathPrefix("/").Handler(spaHandler{staticDir: http.Dir("./static/")})
@@ -2210,7 +2302,49 @@ func main() {
 
 	router := setupRoutes(db, cfg, dispatcher, hub, scheduler)
 
-	log.Printf("Lantern v%s listening on :%s (auth=%v, db=%s, retention=%dd)",
-		version, cfg.Port, cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
+	// ListenAndServe on its own applies no deadlines at all, so a client that
+	// opens a connection and dribbles out a request header holds a goroutine
+	// and a file descriptor for as long as it likes — the classic Slowloris
+	// shape. ReadHeaderTimeout is the one that actually closes that door.
+	//
+	// WriteTimeout is deliberately not set: it would also cap GET /api/backup,
+	// which streams the whole database and can legitimately run long over a
+	// slow link. Slow *writers* are already handled per-message by the write
+	// deadline in writePump and by the dispatcher's 10s HTTP client.
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("Lantern v%s listening on :%s (auth=%v, db=%s, retention=%dd)",
+			version, cfg.Port, cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("http server error: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	stop()
+	log.Printf("shutdown signal received, draining connections")
+
+	// Bounded, so a wedged request cannot stop the container from stopping.
+	// Hijacked WebSocket connections are not tracked by Shutdown and so do not
+	// hold it up; their read loops end when the process exits.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown did not finish cleanly: %v", err)
+	}
+
+	// Reachable at last. Under log.Fatal(ListenAndServe(...)) this process
+	// called os.Exit, so the `defer db.Close()` above never ran and SQLite was
+	// only ever closed by the OS tearing the process down.
+	log.Printf("Lantern stopped")
 }

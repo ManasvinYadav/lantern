@@ -257,6 +257,42 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// lookupScopedToken resolves a per-service bearer token to its service.
+//
+// Session tokens have always been stored as a SHA-256 hash, but api_tokens
+// held the bearer verbatim, so anyone who obtained the database file — a
+// backup, a stray volume copy — got working credentials rather than hashes.
+// Rows are matched by hash first and upgraded in place the first time a
+// plaintext row is used, which keeps the existing "insert a row with sqlite3"
+// workflow working while draining the plaintext out of the table.
+//
+// The plaintext fallback is what makes the migration lazy rather than a schema
+// rewrite; it is also the reason this is a reduction of exposure over time and
+// not an immediate elimination of it. A row never used again stays plaintext.
+func lookupScopedToken(db *sql.DB, token string) (string, bool) {
+	hashed := hashSessionToken(token)
+
+	var serviceName string
+	if err := db.QueryRow(
+		`SELECT service_name FROM api_tokens WHERE token = ?`, hashed).Scan(&serviceName); err == nil {
+		return serviceName, true
+	}
+
+	if err := db.QueryRow(
+		`SELECT service_name FROM api_tokens WHERE token = ?`, token).Scan(&serviceName); err != nil {
+		return "", false
+	}
+
+	// Upgrade this row now that we know the plaintext. A conflicting hashed
+	// row would mean the same token exists twice; leaving the plaintext row
+	// alone in that case is harmless and keeps the token working.
+	if _, err := db.Exec(
+		`UPDATE api_tokens SET token = ? WHERE token = ?`, hashed, token); err != nil {
+		log.Printf("auth: could not hash stored API token for %q: %v", serviceName, err)
+	}
+	return serviceName, true
+}
+
 // ---------------------------------------------------------------------------
 // Login throttle
 // ---------------------------------------------------------------------------
@@ -396,9 +432,7 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 				return
 			}
 
-			var serviceName string
-			if err := db.QueryRow("SELECT service_name FROM api_tokens WHERE token = ?", token).
-				Scan(&serviceName); err == nil {
+			if serviceName, ok := lookupScopedToken(db, token); ok {
 				ctx := context.WithValue(r.Context(), scopedServiceKey, serviceName)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -543,7 +577,11 @@ type credentialsRequest struct {
 // password — there is nothing to verify, and in that state the dashboard is
 // already fully open, so this grants no access that was not already there. It
 // is the only way to turn auth on from the UI.
-func handlePutCredentials(db *sql.DB) http.HandlerFunc {
+//
+// That last argument only holds when nothing is configured at all. With
+// LANTERN_AUTH_TOKEN set the dashboard is *not* open, so setup mode there
+// additionally requires the admin token.
+func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req credentialsRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
@@ -552,6 +590,20 @@ func handlePutCredentials(db *sql.DB) http.HandlerFunc {
 		}
 
 		setup := !authRequired()
+
+		// Setup mode grants an admin session to a caller who proved nothing,
+		// which is only defensible when the dashboard was already wide open.
+		// On a token-mode deployment the operator has configured auth, so
+		// minting an admin out of nothing is a privilege escalation — the
+		// middleware now gates this route, and this is the second lock.
+		if setup && cfg.AuthToken != "" {
+			ctxAdmin, _ := r.Context().Value(isAdminKey).(bool)
+			if !ctxAdmin {
+				writeError(w, http.StatusUnauthorized,
+					"Set credentials with the admin API token, or unset LANTERN_AUTH_TOKEN first.")
+				return
+			}
+		}
 		currentUser, _, _ := loadCredentials(db)
 
 		if !setup {

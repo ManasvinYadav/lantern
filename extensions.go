@@ -793,7 +793,7 @@ var apiDocSections = []apiDocSection{
 		{"GET", "/api/activity?limit=", "Merged, timestamp-sorted feed of status changes and webhook deliveries across all services.", ""},
 	}},
 	{"Webhooks", []apiDocRoute{
-		{"GET", "/api/webhooks", "Configured webhook URLs per channel and their source (db/env/none).", ""},
+		{"GET", "/api/webhooks", "Configured webhook URLs per channel and their source (db/env/none). Requires auth once configured — a Discord or Telegram webhook URL is itself a credential.", ""},
 		{"PUT", "/api/webhooks", "Save webhook URL(s). Requires auth once configured.", `curl -X PUT /api/webhooks -d '{"discord":"https://discord.com/api/webhooks/..."}'`},
 		{"POST", "/api/webhooks/test", "Send a test message to one or all configured channels. Requires auth once configured.", `curl -X POST /api/webhooks/test -d '{"channel":"discord"}'`},
 		{"GET", "/api/webhooks/deliveries?limit=", "Recent delivery attempts (success/failure) across all channels.", ""},
@@ -804,17 +804,16 @@ var apiDocSections = []apiDocSection{
 		{"GET", "/api/services/{name}/docker/logs?tail=", "Recent container logs (tail capped at 1000 lines). Requires auth once configured.", ""},
 	}},
 	{"Backup", []apiDocRoute{
-		{"GET", "/api/backup", "Download a consistent database snapshot (VACUUM INTO). See docs/BACKUP.md for restore steps.", ""},
+		{"GET", "/api/backup", "Download a consistent database snapshot (VACUUM INTO). Requires auth once configured — the snapshot contains the credential hash, session hashes and API tokens. See docs/BACKUP.md for restore steps.", ""},
 	}},
 	{"Real-time", []apiDocRoute{
-		{"WS", "/ws", "WebSocket: broadcasts {type:\"status_update\", service:{...}} on every status change. Same auth as the rest of the app.", ""},
+		{"WS", "/ws", "WebSocket: broadcasts {type:\"status_update\", service:{...}} and {type:\"heartbeat\", ...} on every status change. Same auth as the rest of the app; the anonymous mirror at /api/public/ws carries strictly less.", ""},
 	}},
 	{"Public (always unauthenticated)", []apiDocRoute{
 		{"GET", "/api/public/services", "Same shape as /api/services — powers the public /status page.", ""},
 		{"GET", "/api/public/groups", "Same shape as /api/groups.", ""},
-		{"GET", "/api/public/services/{name}/metadata", "Same shape as the private metadata endpoint.", ""},
 		{"GET", "/api/public/services/{name}/uptime", "Same shape as the private uptime endpoint.", ""},
-		{"WS", "/api/public/ws", "WebSocket for the public status page — no auth, ever.", ""},
+		{"WS", "/api/public/ws", "WebSocket for the public status page — no auth, ever. Carries a reduced status_update envelope only: no heartbeat deltas and no check history. A separate hub from /ws, so the gated feed is never mirrored here.", ""},
 	}},
 }
 

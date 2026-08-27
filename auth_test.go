@@ -344,10 +344,17 @@ func TestLoginThrottleLocksOutAfterRepeatedFailures(t *testing.T) {
 
 func putCredentials(t *testing.T, db *sql.DB, body credentialsRequest) *httptest.ResponseRecorder {
 	t.Helper()
+	return putCredentialsWithConfig(t, db, &Config{}, body)
+}
+
+// putCredentialsWithConfig is the same call with an explicit Config, so a test
+// can exercise the token-mode setup guard.
+func putCredentialsWithConfig(t *testing.T, db *sql.DB, cfg *Config, body credentialsRequest) *httptest.ResponseRecorder {
+	t.Helper()
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPut, "/api/auth/credentials", bytes.NewReader(b))
 	rec := httptest.NewRecorder()
-	handlePutCredentials(db)(rec, req)
+	handlePutCredentials(db, cfg)(rec, req)
 	return rec
 }
 
@@ -621,5 +628,163 @@ func TestAuthSessionReportsTokenModeWithoutAWall(t *testing.T) {
 	}
 	if !out.TokenMode {
 		t.Error("token_mode = false, want true when LANTERN_AUTH_TOKEN is set alone")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression: routes that the gate used to miss
+//
+// Every case below was a live bypass before this change, verified against a
+// running server rather than only in a test. They are pinned here so the next
+// route added to setupRoutes cannot quietly reopen one.
+// ---------------------------------------------------------------------------
+
+// tokenModeMiddleware builds the LANTERN_AUTH_TOKEN-only configuration: no
+// admin row, no username/password, just the bearer token. In that mode the
+// middleware falls through to isProtectedEndpoint, so anything that function
+// forgets is reachable by anyone.
+func tokenModeMiddleware(t *testing.T) http.Handler {
+	t.Helper()
+	db := newTestDB(t)
+	if authRequired() {
+		t.Fatal("token-mode fixture unexpectedly has stored credentials")
+	}
+	return authMiddleware(db, &Config{AuthToken: "super-secret-admin-token"}, okHandler())
+}
+
+func TestTokenModeGatesCredentialChange(t *testing.T) {
+	h := tokenModeMiddleware(t)
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"new_username":"attacker","new_password":"attackerpass"}`)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/auth/credentials", body))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous PUT /api/auth/credentials = %d, want 401 — this is the "+
+			"unauthenticated admin takeover: setup mode hands back an admin session", rec.Code)
+	}
+}
+
+func TestTokenModeGatesBackupAndWebhookReads(t *testing.T) {
+	h := tokenModeMiddleware(t)
+	// Both are reads, which is exactly why they were missed: isProtectedEndpoint
+	// was written around mutating routes. /api/backup returns the credential
+	// hash, session hashes and API tokens; /api/webhooks returns Discord and
+	// Telegram URLs, which are themselves credentials.
+	for _, path := range []string{"/api/backup", "/api/webhooks"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous GET %s = %d, want 401", path, rec.Code)
+		}
+	}
+}
+
+func TestTokenModeStillAllowsTheAdminToken(t *testing.T) {
+	h := tokenModeMiddleware(t)
+	for _, path := range []string{"/api/backup", "/api/webhooks", "/api/auth/credentials"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s with the admin token = %d, want 200 — gating must not "+
+				"break the operator's own access", path, rec.Code)
+		}
+	}
+}
+
+// The setup path exists so an open dashboard can turn auth on from the UI.
+// With a token configured the dashboard is not open, so setup there would be a
+// privilege escalation even if the middleware ever let the request through.
+func TestSetupModeRefusedWhenATokenIsConfigured(t *testing.T) {
+	db := newTestDB(t)
+	rec := putCredentialsWithConfig(t, db, &Config{AuthToken: "super-secret-admin-token"},
+		credentialsRequest{NewUsername: "attacker", NewPassword: "attackerpass"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("setup with a token configured = %d, want 401", rec.Code)
+	}
+	if authRequired() {
+		t.Fatal("a refused setup still wrote credentials")
+	}
+}
+
+// /ws is deliberately gated. /api/public/ws was registered onto the same hub,
+// so the gate bought nothing: the anonymous socket carried identical
+// broadcasts. They are separate hubs now, and this pins the exemption split.
+func TestPublicWebsocketIsExemptAndPrivateOneIsNot(t *testing.T) {
+	if authExemptPath("/ws") {
+		t.Error("/ws is exempt from the gate; it must require a session")
+	}
+	if !authExemptPath("/api/public/ws") {
+		t.Error("/api/public/ws must stay open — it powers the public status page")
+	}
+	hub := newWSHub()
+	if hub.public == nil {
+		t.Fatal("newWSHub did not create the public counterpart hub")
+	}
+	if hub.public == hub {
+		t.Fatal("the public hub is the private hub; a gated broadcast would be mirrored to anonymous clients")
+	}
+	if hub.public.public != nil {
+		t.Error("the public hub has its own public hub, which would recurse")
+	}
+}
+
+// The public envelope is spelled out field by field precisely so that a field
+// added to ServiceSummary does not reach anonymous listeners by default.
+// History is the one deliberately dropped: the public page has no heartbeat bar.
+func TestPublicBroadcastDropsHeartbeatHistory(t *testing.T) {
+	full := ServiceSummary{
+		ServiceName: "db",
+		Status:      "up",
+		Message:     "ok",
+		History:     []HeartbeatBeat{{Status: "up", Msg: "internal detail"}},
+	}
+	pub := publicViewOf(full)
+	body, err := json.Marshal(wsPublicMessage{Type: "status_update", Service: pub})
+	if err != nil {
+		t.Fatalf("marshal public message: %v", err)
+	}
+	if strings.Contains(string(body), "internal detail") {
+		t.Errorf("public broadcast carries heartbeat message bodies: %s", body)
+	}
+	if strings.Contains(string(body), `"history"`) {
+		t.Errorf("public broadcast carries check history: %s", body)
+	}
+	if pub.ServiceName != "db" || pub.Status != "up" {
+		t.Errorf("public view lost the fields the status page needs: %+v", pub)
+	}
+}
+
+// Session tokens were always hashed at rest; per-service API tokens were not,
+// so a copy of the database yielded working bearers rather than digests.
+func TestScopedApiTokenIsHashedInPlaceOnFirstUse(t *testing.T) {
+	db := newTestDB(t)
+	const raw = "plaintext-scoped-token"
+	if _, err := db.Exec(`INSERT INTO api_tokens (token, service_name) VALUES (?, ?)`, raw, "db"); err != nil {
+		t.Fatalf("seed api_tokens: %v", err)
+	}
+
+	name, ok := lookupScopedToken(db, raw)
+	if !ok || name != "db" {
+		t.Fatalf("lookupScopedToken(plaintext) = (%q, %v), want (db, true)", name, ok)
+	}
+
+	var stored string
+	if err := db.QueryRow(`SELECT token FROM api_tokens WHERE service_name = ?`, "db").Scan(&stored); err != nil {
+		t.Fatalf("read back token: %v", err)
+	}
+	if stored == raw {
+		t.Error("token is still stored in plaintext after being used")
+	}
+	if stored != hashSessionToken(raw) {
+		t.Errorf("stored token = %q, want the SHA-256 of the bearer", stored)
+	}
+
+	// Still resolvable afterwards — the upgrade must be transparent.
+	if name, ok := lookupScopedToken(db, raw); !ok || name != "db" {
+		t.Errorf("lookupScopedToken after upgrade = (%q, %v), want (db, true)", name, ok)
+	}
+	if _, ok := lookupScopedToken(db, "not-a-token"); ok {
+		t.Error("an unknown bearer resolved to a service")
 	}
 }

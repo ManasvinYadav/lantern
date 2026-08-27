@@ -14,7 +14,44 @@ env:
   IMAGE_NAME: manasvinyadav/lantern
 
 jobs:
+  # Nothing gated the image before this: the workflow went straight to build
+  # and push, so `go vet` and the test suite never ran in CI at all.
+  #
+  # ubuntu-latest is also the only place `-race` can run. The usual deployment
+  # target is a 64-bit Raspberry Pi, whose kernel is built with
+  # CONFIG_ARM64_VA_BITS=39; ThreadSanitizer requires a 48-bit address layout
+  # and aborts with "unsupported VMA range" there. Running the race detector on
+  # this amd64 runner is what gives the project any race coverage at all.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with the race detector
+        run: go test -race -count=1 ./...
+
   build-and-push-image:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

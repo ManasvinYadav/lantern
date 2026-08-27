@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔆 Lantern v0.59.1 — Service Dashboard</title>
+  <title>🔆 Lantern v0.60.0 — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -738,13 +738,24 @@
     /* =====================================================================
        Drawers (Service Detail & Diagnostics)
        ===================================================================== */
+    /* visibility:hidden, not just opacity:0. A closed overlay is still
+       position:fixed;inset:0;display:flex, so everything inside it keeps a
+       real layout box -- which is how the settings drawer's password fields
+       stayed discoverable to password-manager extensions on a dashboard that
+       was never showing a login form. The 0s-linear delay defers the flip
+       until the 0.28s drawer slide-out has finished, so the fade still reads
+       as a fade. */
     .drawer-overlay {
       position: fixed; inset: 0; background: var(--overlay);
       z-index: 1000; display: flex; justify-content: flex-end;
-      opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
+      opacity: 0; pointer-events: none; visibility: hidden;
+      transition: opacity 0.25s ease, visibility 0s linear 0.3s;
       backdrop-filter: blur(4px);
     }
-    .drawer-overlay.open { opacity: 1; pointer-events: auto; }
+    .drawer-overlay.open {
+      opacity: 1; pointer-events: auto; visibility: visible;
+      transition: opacity 0.25s ease, visibility 0s linear 0s;
+    }
 
     .drawer {
       width: 600px; max-width: 100vw; height: 100vh;
@@ -867,6 +878,12 @@
        Modals — floating dialogs that can layer above an open drawer.
        z-index sits between .drawer-overlay (1000) and .toast (9999).
        ===================================================================== */
+    /* See .drawer-overlay. This one mattered most: the closed #loginOverlay is
+       a full-viewport flex container that centres its dialog, so its password
+       field sat dead centre of the dashboard with a real bounding rect on
+       every page load -- signed in, signed out, or with auth disabled
+       entirely. That rect is what password managers anchor their inline
+       autofill menu to; opacity is not part of their visibility test. */
     .modal-overlay {
       position: fixed; inset: 0; z-index: 1090;
       display: flex; align-items: center; justify-content: center;
@@ -874,10 +891,15 @@
       background: var(--modal-backdrop);
       -webkit-backdrop-filter: blur(12px);
       backdrop-filter: blur(12px);
-      opacity: 0; pointer-events: none;
-      transition: opacity var(--duration-modal) var(--ease-out);
+      opacity: 0; pointer-events: none; visibility: hidden;
+      transition: opacity var(--duration-modal) var(--ease-out),
+                  visibility 0s linear var(--duration-modal);
     }
-    .modal-overlay.open { opacity: 1; pointer-events: auto; }
+    .modal-overlay.open {
+      opacity: 1; pointer-events: auto; visibility: visible;
+      transition: opacity var(--duration-modal) var(--ease-out),
+                  visibility 0s linear 0s;
+    }
 
     .modal {
       position: relative; z-index: 1100;
@@ -2210,7 +2232,10 @@
       maintenance: (name) => `/api/services/${encodeURIComponent(name)}/maintenance`,
       uptime: (name, range = '30d') => isPublic ? `/api/public/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}` : `/api/services/${encodeURIComponent(name)}/uptime?range=${encodeURIComponent(range)}`,
       incidents: (name) => `/api/services/${encodeURIComponent(name)}/incidents?range=30d`,
-      metadata: (name) => isPublic ? `/api/public/services/${encodeURIComponent(name)}/metadata` : `/api/services/${encodeURIComponent(name)}/metadata`,
+      // Gated only. The public route used to mirror this one, which handed
+      // anonymous visitors the container image, IP, ports and host mount
+      // paths; it has been removed server-side.
+      metadata: (name) => `/api/services/${encodeURIComponent(name)}/metadata`,
       dockerStatus: (name) => `/api/services/${encodeURIComponent(name)}/docker/status`,
       dockerRestart: (name) => `/api/services/${encodeURIComponent(name)}/docker/restart`,
       dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`,
@@ -2349,8 +2374,12 @@
         scheduleWSReconnect();
       });
 
-      ws.addEventListener('error', () => {
-        ws.close();
+      ws.addEventListener('error', (event) => {
+        // event.target, not the module-level `ws`: by the time a late error
+        // fires on an old socket, `ws` may already point at its replacement,
+        // and closing that would restart the backoff loop we just escaped.
+        const sock = (event && event.target) || ws;
+        try { sock.close(); } catch (e) { /* already closed */ }
       });
     }
 
@@ -3451,6 +3480,7 @@
       if (isPublic) document.body.classList.add('is-public');
 
       bindEvents();
+      tagCredentialFields();
 
       // /status is public by construction and never asks for a session.
       if (isPublic) {
@@ -3576,6 +3606,27 @@
         if (!section) return;
         setGroupCollapsed(section.dataset.group, !section.classList.contains('collapsed'));
       });
+
+      // Card "Details". Delegated rather than an inline onclick: the service
+      // name is attacker-supplied (POST /api/status names the service), and
+      // building it into a JS string literal inside an HTML attribute meant it
+      // was parsed twice -- HTML entity decoding handed the apostrophes back
+      // before the JS was compiled. Reading it from dataset keeps it data.
+      gridEl.addEventListener('click', (e) => {
+        const btn = e.target.closest && e.target.closest('[data-open-service]');
+        if (!btn) return;
+        openServiceDrawer(btn.dataset.openService);
+      });
+
+      // Same reasoning for the monitor list's Remove buttons.
+      const monitorsList = document.getElementById('activeMonitorsList');
+      if (monitorsList) {
+        monitorsList.addEventListener('click', (e) => {
+          const btn = e.target.closest && e.target.closest('[data-delete-monitor]');
+          if (!btn) return;
+          deleteActiveMonitor(btn.dataset.deleteMonitor);
+        });
+      }
 
       // ---- Login gate ------------------------------------------------------
       const loginForm = document.getElementById('loginForm');
@@ -4228,7 +4279,7 @@
                 <div style="color:var(--text-muted); font-size:11px;">${info.icon} ${info.label} → ${escapeHtml(m.target)} · every ${m.interval_seconds}s · last checked ${lastChecked}</div>
                 ${certLine}
               </div>
-              <button type="button" class="btn" style="font-size:11px; padding:4px 10px;" onclick="deleteActiveMonitor('${escapeHtml(m.service_name).replace(/'/g, "\\'")}')">Remove</button>
+              <button type="button" class="btn" style="font-size:11px; padding:4px 10px;" data-delete-monitor="${escapeHtml(m.service_name)}">Remove</button>
             </div>`;
         }).join('');
       } catch (err) {
@@ -4742,7 +4793,7 @@
         ${trendHTML}
         <div style="display:flex; justify-content: space-between; align-items: center; margin-top: 4px;">
            <span class="service-relative-ts">${relativeTime(s.timestamp)}</span>
-           <button class="btn" onclick="openServiceDrawer('${escapeHtml(s.service_name).replace(/'/g, "\\'")}')">Details</button>
+           <button type="button" class="btn" data-open-service="${escapeHtml(s.service_name)}">Details</button>
         </div>
       `;
     }
@@ -5167,6 +5218,12 @@
     async function loadServiceMetadata(name) {
       const metaBody = document.getElementById('sdMetadataBody');
       if (!metaBody) return;
+      // Container internals are not part of the public status page. Say so
+      // rather than firing a request that is now a deliberate 404.
+      if (isPublic) {
+        metaBody.innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:12px;">Container details are only available to signed-in administrators.</div>';
+        return;
+      }
       metaBody.innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:12px;">Loading metadata...</div>';
 
       try {
@@ -5438,7 +5495,7 @@
 
         list.innerHTML = data.map(run => `
           <div class="diag-run-card" id="diag-card-${run.id}">
-            <div class="diag-run-header" onclick="toggleDiag('${run.id}')">
+            <div class="diag-run-header" onclick="toggleDiag('${Number(run.id)}')">
               <div class="diag-run-info">
                 <div class="diag-run-title">${escapeHtml(run.title)}</div>
                 <div class="diag-run-meta">${formatTS(run.timestamp)}</div>
@@ -5449,7 +5506,7 @@
               </div>
             </div>
             <div class="diag-run-body">
-               <button class="diag-copy-btn" onclick="copyDiag('${run.id}', this)">Copy Payload</button>
+               <button class="diag-copy-btn" onclick="copyDiag('${Number(run.id)}', this)">Copy Payload</button>
                <div class="diag-log-block" id="diag-log-${run.id}">Loading...</div>
             </div>
           </div>
@@ -5515,6 +5572,46 @@
     const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), '
       + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+    // ---- Credential fields in closed overlays -----------------------------
+    // CSS visibility:hidden handles well-behaved extensions; this handles the
+    // rest. A disabled input is skipped by every password manager and is
+    // excluded from form submission, so while an overlay is closed there is
+    // nothing in it for an autofill prompt to attach to.
+    //
+    // Tagged once at boot rather than selected live, because the reveal button
+    // flips a field between type=password and type=text -- a revealed field
+    // would otherwise stop matching and stay enabled after its overlay closed.
+    const CREDENTIAL_SEL = 'input[type="password"], input[autocomplete="username"],'
+      + ' input[autocomplete="current-password"], input[autocomplete="new-password"]';
+
+    function tagCredentialFields() {
+      document.querySelectorAll('.modal-overlay, .drawer-overlay').forEach(overlay => {
+        overlay.querySelectorAll(CREDENTIAL_SEL).forEach(el => {
+          el.dataset.credential = '1';
+        });
+        // Nothing is open at boot, so start every one of them switched off.
+        setCredentialFieldsEnabled(overlay, false);
+      });
+    }
+
+    function setCredentialFieldsEnabled(root, enabled) {
+      if (!root) return;
+      root.querySelectorAll('[data-credential]').forEach(el => {
+        el.disabled = !enabled;
+        // Closing also drops any revealed plaintext back behind the mask, so
+        // reopening never shows the previous value in the clear.
+        if (!enabled && el.type === 'text') {
+          el.type = 'password';
+          const btn = root.querySelector('.field-reveal[data-reveal="' + el.id + '"]');
+          if (btn) {
+            btn.setAttribute('aria-pressed', 'false');
+            btn.setAttribute('aria-label', 'Show password');
+            btn.title = 'Show password';
+          }
+        }
+      });
+    }
+
     function focusablesIn(el) {
       // offsetParent is null for anything display:none — including the
       // hide-public elements suppressed on /status.
@@ -5527,6 +5624,9 @@
       overlayStack.push({ id: id, restoreFocus: document.activeElement });
       el.classList.add('open');
       el.setAttribute('aria-hidden', 'false');
+      // Before the focus pass below: focusablesIn() filters out :disabled, so
+      // a still-disabled username field would never receive initial focus.
+      setCredentialFieldsEnabled(el, true);
       document.body.style.overflow = 'hidden';
       // Defer: the overlay is display-flex but mid-transition, and
       // focusablesIn filters on offsetParent.
@@ -5550,6 +5650,7 @@
         if (el.contains(document.activeElement)) document.activeElement.blur();
         el.classList.remove('open');
         el.setAttribute('aria-hidden', 'true');
+        setCredentialFieldsEnabled(el, false);
       }
       const idx = overlayStack.findIndex(l => l.id === id);
       if (idx >= 0) {
