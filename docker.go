@@ -354,7 +354,7 @@ func handleGetDockerStatus() http.HandlerFunc {
 }
 
 // handlePostDockerRestart handles POST /api/services/{name}/docker/restart.
-func handlePostDockerRestart(db *sql.DB) http.HandlerFunc {
+func handlePostDockerRestart(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		name := strings.TrimSpace(vars["name"])
@@ -395,10 +395,16 @@ func handlePostDockerRestart(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		_, _ = db.Exec(
-			`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?, 'up', 'Container restart initiated via Lantern Admin', ?)`,
-			name, time.Now().UTC().Format(time.RFC3339),
-		)
+		// Recorded through ingestStatusEvent rather than a direct INSERT, so the
+		// metrics cache is invalidated and the change is broadcast like any
+		// other. The status is "degraded", not "up": the container has only just
+		// been asked to restart and is by definition not serving yet. Claiming
+		// "up" painted a green card for something still coming back, and the
+		// next real check would immediately contradict it.
+		if _, err := ingestStatusEvent(db, cfg, dispatcher, hub, name, "degraded",
+			"Container restart initiated via Lantern Admin", time.Now().UTC(), 0); err != nil {
+			log.Printf("handlePostDockerRestart: failed to record restart for %s: %v", name, err)
+		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       "ok",

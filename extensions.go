@@ -211,6 +211,67 @@ func isInMaintenance(db *sql.DB, name string, t time.Time) bool {
 	return count > 0
 }
 
+// maintenanceWindow is one span during which a service was intentionally
+// offline. A zero `end` means the window is still open.
+type maintenanceWindow struct {
+	start time.Time
+	end   time.Time
+}
+
+func (w maintenanceWindow) covers(t time.Time) bool {
+	if t.Before(w.start) {
+		return false
+	}
+	return w.end.IsZero() || !t.After(w.end)
+}
+
+// inAnyWindow reports whether t falls inside any of the given windows.
+func inAnyWindow(ws []maintenanceWindow, t time.Time) bool {
+	for _, w := range ws {
+		if w.covers(t) {
+			return true
+		}
+	}
+	return false
+}
+
+// loadMaintenanceWindows reads every maintenance window for a service in one
+// query, for callers that need to test many timestamps against them.
+//
+// isInMaintenance below issues a COUNT per call, which is fine for a handful of
+// checks and badly wrong inside a loop over a service's timeline: handleGetUptime
+// walks one segment per recorded event, so at range=30d with a 60s monitor that
+// was on the order of tens of thousands of round trips — inside a single
+// request, on a route that is reachable without credentials.
+func loadMaintenanceWindows(db *sql.DB, name string) []maintenanceWindow {
+	rows, err := db.Query(
+		`SELECT started_at, COALESCE(ended_at, '') FROM maintenance_windows WHERE service_name = ?`, name)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var out []maintenanceWindow
+	for rows.Next() {
+		var startStr, endStr string
+		if err := rows.Scan(&startStr, &endStr); err != nil {
+			continue
+		}
+		start, err := time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			continue
+		}
+		w := maintenanceWindow{start: start}
+		if endStr != "" {
+			if end, err := time.Parse(time.RFC3339, endStr); err == nil {
+				w.end = end
+			}
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 // parseRange converts a range string to hours.
 func parseRange(rng string) int {
 	switch rng {
@@ -298,6 +359,7 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 		}
 		prior := fetchLastEventBefore(db, name, since)
 		timeline := buildTimeline(prior, events, since)
+		windows := loadMaintenanceWindows(db, name)
 
 		totalSec := now.Sub(since).Seconds()
 		if totalSec <= 0 {
@@ -328,7 +390,7 @@ func handleGetUptime(db *sql.DB) http.HandlerFunc {
 				continue
 			}
 			if isDown(seg.status) {
-				if !isInMaintenance(db, name, seg.start) {
+				if !inAnyWindow(windows, seg.start) {
 					downSec += dur
 				}
 				if !inIncident {
@@ -582,6 +644,7 @@ func handleGetIncidents(db *sql.DB) http.HandlerFunc {
 		}
 		prior := fetchLastEventBefore(db, name, since)
 		timeline := buildTimeline(prior, events, since)
+		windows := loadMaintenanceWindows(db, name)
 
 		var incidents []Incident
 		var incStart *time.Time
@@ -609,7 +672,7 @@ func handleGetIncidents(db *sql.DB) http.HandlerFunc {
 				}
 			} else {
 				if incStart != nil {
-					inMaint := isInMaintenance(db, name, *incStart)
+					inMaint := inAnyWindow(windows, *incStart)
 					durMin := seg.start.Sub(*incStart).Minutes()
 					incidents = append(incidents, Incident{
 						StartedAt:       incStart.Format(time.RFC3339),
@@ -626,7 +689,7 @@ func handleGetIncidents(db *sql.DB) http.HandlerFunc {
 
 		// Still in an incident at end of window
 		if incStart != nil {
-			inMaint := isInMaintenance(db, name, *incStart)
+			inMaint := inAnyWindow(windows, *incStart)
 			durMin := now.Sub(*incStart).Minutes()
 			incidents = append(incidents, Incident{
 				StartedAt:       incStart.Format(time.RFC3339),
@@ -667,18 +730,58 @@ func setMaintenanceState(db *sql.DB, name string, enabled bool, note string) str
 	if enabled {
 		val = 1
 	}
-	db.Exec(`INSERT INTO service_maintenance (service_name, enabled, note, updated_at)
-		VALUES (?, ?, ?, ?) ON CONFLICT(service_name) DO UPDATE SET enabled=?, note=?, updated_at=?`,
-		name, val, note, now, val, note, now)
 
-	if enabled {
-		db.Exec(`INSERT INTO maintenance_windows (service_name, started_at, note) VALUES (?, ?, ?)`,
-			name, now, note)
-	} else {
-		db.Exec(`UPDATE maintenance_windows SET ended_at = ? WHERE service_name = ? AND ended_at IS NULL`,
-			now, name)
+	// One transaction, because these two writes have to agree: the flag on
+	// service_maintenance is what suppresses alerts, and the row in
+	// maintenance_windows is what uptime accounting reads. Previously they were
+	// two bare Execs with both errors discarded, so a failure between them left
+	// a service flagged as under maintenance with no window to prove it — or a
+	// window that never closed, quietly excluding real downtime from uptime
+	// forever after.
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("setMaintenanceState: begin failed for %s: %v", name, err)
+		return now
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`INSERT INTO service_maintenance (service_name, enabled, note, updated_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(service_name) DO UPDATE SET enabled=?, note=?, updated_at=?`,
+		name, val, note, now, val, note, now); err != nil {
+		log.Printf("setMaintenanceState: flag write failed for %s: %v", name, err)
+		return now
 	}
 
+	if enabled {
+		// Guard against a second "enable" opening a duplicate window; without
+		// it a double click leaves two open windows and only one ever closes.
+		var open int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM maintenance_windows WHERE service_name = ? AND ended_at IS NULL`,
+			name).Scan(&open); err != nil {
+			log.Printf("setMaintenanceState: open-window check failed for %s: %v", name, err)
+			return now
+		}
+		if open == 0 {
+			if _, err := tx.Exec(
+				`INSERT INTO maintenance_windows (service_name, started_at, note) VALUES (?, ?, ?)`,
+				name, now, note); err != nil {
+				log.Printf("setMaintenanceState: window open failed for %s: %v", name, err)
+				return now
+			}
+		}
+	} else {
+		if _, err := tx.Exec(
+			`UPDATE maintenance_windows SET ended_at = ? WHERE service_name = ? AND ended_at IS NULL`,
+			now, name); err != nil {
+			log.Printf("setMaintenanceState: window close failed for %s: %v", name, err)
+			return now
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("setMaintenanceState: commit failed for %s: %v", name, err)
+	}
 	return now
 }
 
@@ -690,7 +793,7 @@ func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 			Enabled bool   `json:"enabled"`
 			Note    string `json:"note"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
@@ -883,16 +986,23 @@ func seedDemoData(db *sql.DB) {
 	}
 }
 
-// computeServiceMetricsUnified computes 7d uptime, 30d uptime, and 30-day daily status buckets
-// in a single pass over 30 days of data, reducing redundant SQL queries and heap allocations by ~70%.
-func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
+// computeServiceMetricsUnified computes 7-day and 30-day uptime in a single
+// pass over 30 days of events.
+//
+// It used to also build 30 daily status buckets — and every one of its three
+// callers discarded them with `_`. That was not free: the bucket loop ran a
+// maintenance lookup per bucket, so each call spent 30 extra queries producing
+// a value nothing read, on every uncached dashboard poll, every WebSocket
+// broadcast, and every Prometheus scrape. The bucketing logic that is actually
+// used lives in handleGetStrip.
+func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, float64) {
 	now := time.Now().UTC()
 	since30d := now.Add(-30 * 24 * time.Hour)
 	since7d := now.Add(-7 * 24 * time.Hour)
 
 	events, err := fetchEvents(db, serviceName, since30d)
 	if err != nil {
-		return 0, 0, make([]StatusBucket, 0)
+		return 0, 0
 	}
 	prior := fetchLastEventBefore(db, serviceName, since30d)
 	timeline := buildTimeline(prior, events, since30d)
@@ -975,83 +1085,12 @@ func computeServiceMetricsUnified(db *sql.DB, serviceName string) (float64, floa
 		pct7d = 0
 	}
 
-	numBuckets := 30
-	bucketDur := (30 * 24 * time.Hour) / time.Duration(numBuckets)
-	buckets := make([]StatusBucket, 0, numBuckets)
-
-	for i := 0; i < numBuckets; i++ {
-		bStart := since30d.Add(time.Duration(i) * bucketDur)
-		bEnd := bStart.Add(bucketDur)
-		if bEnd.After(now) {
-			bEnd = now
-		}
-		bDur := bEnd.Sub(bStart).Seconds()
-		if bDur <= 0 {
-			buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: "unknown"})
-			continue
-		}
-
-		statusTime := map[string]float64{}
-		bs := statusAtTime(timeline, bStart)
-		cursor := bStart
-		var nextIdx int
-		for j, seg := range timeline {
-			if seg.start.After(bStart) {
-				nextIdx = j
-				break
-			}
-		}
-		if nextIdx == 0 && (len(timeline) == 0 || timeline[0].start.After(bStart)) {
-			nextIdx = len(timeline)
-		}
-
-		for cursor.Before(bEnd) {
-			var segEnd time.Time
-			if nextIdx < len(timeline) {
-				segEnd = timeline[nextIdx].start
-			} else {
-				segEnd = now
-			}
-			if segEnd.After(bEnd) {
-				segEnd = bEnd
-			}
-			d := segEnd.Sub(cursor).Seconds()
-			if d > 0 {
-				statusTime[bs] += d
-			}
-			cursor = segEnd
-			if nextIdx < len(timeline) {
-				bs = timeline[nextIdx].status
-				nextIdx++
-			} else {
-				break
-			}
-		}
-
-		dom := "unknown"
-		maxT := -1.0
-		for st, t := range statusTime {
-			if t > maxT || (t == maxT && statusPriority(st) > statusPriority(dom)) {
-				maxT = t
-				dom = st
-			}
-		}
-		if maxT <= 0 {
-			dom = "unknown"
-		} else if dom != "up" && isInMaintenance(db, serviceName, bStart) {
-			dom = "maintenance"
-		}
-
-		buckets = append(buckets, StatusBucket{Start: bStart.Format(time.RFC3339), Status: dom})
-	}
-
-	return pct7d, pct30d, buckets
+	return pct7d, pct30d
 }
 
 type cachedServiceMetrics struct {
 	Uptime7d  float64
 	Uptime30d float64
-	History   []StatusBucket
 	CachedAt  time.Time
 }
 
@@ -1060,27 +1099,26 @@ var (
 	metricsCache      = make(map[string]cachedServiceMetrics)
 )
 
-func getCachedOrComputeServiceMetrics(db *sql.DB, serviceName string) (float64, float64, []StatusBucket) {
+func getCachedOrComputeServiceMetrics(db *sql.DB, serviceName string) (float64, float64) {
 	metricsCacheMutex.RLock()
 	c, ok := metricsCache[serviceName]
 	metricsCacheMutex.RUnlock()
 
 	if ok && time.Since(c.CachedAt) < 15*time.Second {
-		return c.Uptime7d, c.Uptime30d, c.History
+		return c.Uptime7d, c.Uptime30d
 	}
 
-	up7, up30, buckets := computeServiceMetricsUnified(db, serviceName)
+	up7, up30 := computeServiceMetricsUnified(db, serviceName)
 
 	metricsCacheMutex.Lock()
 	metricsCache[serviceName] = cachedServiceMetrics{
 		Uptime7d:  up7,
 		Uptime30d: up30,
-		History:   buckets,
 		CachedAt:  time.Now(),
 	}
 	metricsCacheMutex.Unlock()
 
-	return up7, up30, buckets
+	return up7, up30
 }
 
 func invalidateServiceMetricsCache(serviceName string) {
@@ -1169,6 +1207,11 @@ func handleDeleteService(db *sql.DB, scheduler *monitorScheduler) http.HandlerFu
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+
+		// Without this the cache keeps serving the deleted service's uptime for
+		// up to 15 seconds, and a service recreated under the same name inherits
+		// the old figures.
+		invalidateServiceMetricsCache(name)
 
 		log.Printf("service deleted: %s (%v)", name, deleted)
 		writeJSON(w, http.StatusOK, map[string]any{

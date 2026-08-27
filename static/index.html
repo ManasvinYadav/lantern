@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔆 Lantern v0.60.0 — Service Dashboard</title>
+  <title>🔆 Lantern v0.61.0 — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -3618,6 +3618,14 @@
         openServiceDrawer(btn.dataset.openService);
       });
 
+      // The empty state's reset button, delegated like the rest — it is
+      // rendered into the grid on demand, so it cannot be bound up front.
+      gridEl.addEventListener('click', (e) => {
+        const btn = e.target.closest && e.target.closest('[data-reset-filters]');
+        if (!btn) return;
+        resetFilters();
+      });
+
       // Same reasoning for the monitor list's Remove buttons.
       const monitorsList = document.getElementById('activeMonitorsList');
       if (monitorsList) {
@@ -4840,12 +4848,17 @@
       if (countEl) countEl.innerText = filtered.length;
 
       if (filtered.length === 0) {
+        // A fresh install with nothing reported yet has no filters to reset, so
+        // offering the button there sent people looking for a setting that was
+        // never the problem. Only show it when a filter is actually narrowing
+        // the list, and title the state for what it is.
+        const filtered_out = anyFilterActive();
         grid.innerHTML = `
           <div class="empty-state">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-            <div class="empty-state-title">No services found</div>
+            <div class="empty-state-title">${filtered_out ? 'No services match' : 'No services yet'}</div>
             <div class="empty-state-sub">${emptyStateReason()}</div>
-            <button class="btn" onclick="resetFilters()">Reset Filters</button>
+            ${filtered_out ? '<button type="button" class="btn" data-reset-filters>Reset Filters</button>' : ''}
           </div>`;
         return;
       }
@@ -5090,6 +5103,15 @@
 
         reconcileCards(section.querySelector('.service-group-body'), byGroup.get(key));
       });
+    }
+
+    // True when something is narrowing the list, as opposed to there being
+    // nothing to show in the first place.
+    function anyFilterActive() {
+      return !!(state.searchQuery
+        || (state.sourceFilter && state.sourceFilter !== 'all')
+        || state.filter !== 'all'
+        || state.groupFilter);
     }
 
     // Names the filters that are actually active, so the empty state says

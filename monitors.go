@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -172,8 +173,19 @@ func checkTCP(target string) (string, string) {
 	return "up", fmt.Sprintf("TCP connect succeeded in %s", time.Since(start).Round(time.Millisecond))
 }
 
+// pingSeq hands out a distinct sequence number per probe. A raw ICMP socket
+// receives every echo reply the host gets, not just the ones answering this
+// probe, so concurrent checks need something to tell their own reply apart.
+var pingSeq atomic.Uint32
+
 // checkPing sends a real ICMP echo request. Requires CAP_NET_RAW, which
 // Docker grants by default to containers running as root (Lantern's does).
+//
+// The reply is matched on source address, echo ID and sequence number. Without
+// that, four workers pinging four hosts concurrently could each read whichever
+// reply arrived first — so a check against a dead host would report "up" on the
+// strength of a live host's reply. Unmatched packets are skipped rather than
+// treated as the answer, until the deadline expires.
 func checkPing(host string) (string, string) {
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
@@ -186,12 +198,15 @@ func checkPing(host string) (string, string) {
 		return "down", fmt.Sprintf("dns resolve failed: %v", err)
 	}
 
+	id := os.Getpid() & 0xffff
+	seq := int(pingSeq.Add(1) & 0xffff)
+
 	msg := icmp.Message{
 		Type: ipv4.ICMPTypeEcho,
 		Code: 0,
 		Body: &icmp.Echo{
-			ID:   os.Getpid() & 0xffff,
-			Seq:  1,
+			ID:   id,
+			Seq:  seq,
 			Data: []byte("lantern-ping"),
 		},
 	}
@@ -209,20 +224,31 @@ func checkPing(host string) (string, string) {
 		return "down", fmt.Sprintf("failed to set read deadline: %v", err)
 	}
 	reply := make([]byte, 1500)
-	n, _, err := conn.ReadFrom(reply)
-	if err != nil {
-		return "down", fmt.Sprintf("no icmp reply: %v", err)
-	}
-	rtt := time.Since(start)
+	for {
+		n, peer, err := conn.ReadFrom(reply)
+		if err != nil {
+			return "down", fmt.Sprintf("no icmp reply: %v", err)
+		}
+		rtt := time.Since(start)
 
-	rm, err := icmp.ParseMessage(1, reply[:n]) // protocol 1 = ICMPv4
-	if err != nil {
-		return "down", fmt.Sprintf("failed to parse icmp reply: %v", err)
+		// Someone else's echo reply, arriving on our shared raw socket.
+		if peer == nil || peer.String() != dst.IP.String() {
+			continue
+		}
+
+		rm, err := icmp.ParseMessage(1, reply[:n]) // protocol 1 = ICMPv4
+		if err != nil {
+			continue
+		}
+		if rm.Type != ipv4.ICMPTypeEchoReply {
+			continue
+		}
+		echo, ok := rm.Body.(*icmp.Echo)
+		if !ok || echo.ID != id || echo.Seq != seq {
+			continue
+		}
+		return "up", fmt.Sprintf("ping reply in %s", rtt.Round(time.Millisecond))
 	}
-	if rm.Type != ipv4.ICMPTypeEchoReply {
-		return "down", fmt.Sprintf("unexpected icmp reply type: %v", rm.Type)
-	}
-	return "up", fmt.Sprintf("ping reply in %s", rtt.Round(time.Millisecond))
 }
 
 // ---------------------------------------------------------------------------
@@ -269,11 +295,22 @@ func (s *monitorScheduler) loadAndStartAll() {
 }
 
 // start begins (or restarts, if already running) the ticker for one service.
+//
+// The stop-and-replace is done under a single lock hold. Splitting it — stop(),
+// release, re-acquire, store — left a window in which two concurrent
+// PUT /api/services/{name}/monitor calls both created a channel and one
+// overwrote the other in the map. The overwritten goroutine's stop channel was
+// then unreachable, so its ticker ran for the lifetime of the process, still
+// enqueuing checks and still writing status_events. The visible symptom was a
+// service that reappeared after being deleted.
 func (s *monitorScheduler) start(serviceName, monitorType, target string, intervalSeconds int) {
-	s.stop(serviceName)
-
 	stop := make(chan struct{})
+
 	s.mu.Lock()
+	if prev, ok := s.stopFns[serviceName]; ok {
+		close(prev)
+		delete(s.stopFns, serviceName)
+	}
 	s.stopFns[serviceName] = stop
 	s.mu.Unlock()
 
@@ -419,7 +456,7 @@ func handlePutServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Handl
 			IntervalSeconds int    `json:"interval_seconds"`
 			Enabled         *bool  `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}

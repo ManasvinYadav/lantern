@@ -209,6 +209,32 @@ The upgrade is lazy, which is the honest caveat: a token that is never used
 again stays in plaintext. If you have issued tokens you no longer use, delete
 the rows rather than leaving them.
 
+### Origin and framing controls
+
+| Variable | Default | Description |
+|---|---|---|
+| `LANTERN_WS_ALLOWED_ORIGINS` | *(empty)* | Comma-separated origins allowed to open a WebSocket, in addition to the dashboard's own host. Empty means same-host only. |
+| `LANTERN_FRAME_ANCESTORS` | `'self'` | The CSP `frame-ancestors` source list. Set this to embed the dashboard in an iframe on another origin. |
+
+WebSocket handshakes are accepted from the dashboard's own host, from anything
+listed in `LANTERN_WS_ALLOWED_ORIGINS`, and from clients that send no `Origin`
+header at all — browsers always send one, so an absent header means a script or
+a CLI rather than a cross-site page. Before v0.61.0 every origin was accepted,
+which let any website a user visited open a socket to their Lantern and read the
+live service feed.
+
+Framing follows the same shape. The dashboard sets `frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN`, so it can be embedded on its own origin but not
+from another one. If you surface Lantern inside a homepage app served from a
+different port, name that origin explicitly:
+
+```yaml
+- LANTERN_FRAME_ANCESTORS=http://homepage.local:3000
+```
+
+Setting it to anything other than the default drops the `X-Frame-Options`
+header, which cannot express an allowlist.
+
 ### Hardening notes
 
 The HTTP server sets `ReadHeaderTimeout` (10s), `ReadTimeout` (30s) and
@@ -218,6 +244,19 @@ part-way through a request. `WriteTimeout` is deliberately unset: `GET
 link. `SIGTERM` and `SIGINT` drain in-flight requests for up to 15 seconds
 before the process exits, so a `docker compose down` no longer cuts a SQLite
 write mid-flight.
+
+Every response also carries `Content-Security-Policy`, `X-Content-Type-Options:
+nosniff` and `Referrer-Policy: no-referrer`. The CSP allows inline scripts and
+styles, because the dashboard ships as one self-contained `index.html`; what it
+does enforce is that nothing loads from, or connects to, another origin.
+
+Request bodies are capped: 64 KiB for `POST /api/status`, 1 MiB for
+`POST /api/diagnostics` (which carries log dumps), and 4 KiB for configuration
+writes. Oversized bodies are rejected with `400`.
+
+The SQLite pool is bounded at 8 connections. SQLite has a single writer, so an
+unbounded pool spent connections queueing for the same lock rather than buying
+concurrency.
 
 These bound resource exhaustion from slow or abandoned connections. They are not
 a rate limiter and not a WAF — Lantern still expects to sit on a trusted network

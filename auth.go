@@ -309,6 +309,28 @@ type loginThrottle struct {
 type throttleEntry struct {
 	failures int
 	until    time.Time
+	// lastSeen drives eviction. Without it the map only ever shrank on a
+	// successful login or an expired lockout, so a source that failed once or
+	// twice and never returned stayed forever — and an attacker rotating source
+	// addresses grew it without bound.
+	lastSeen time.Time
+}
+
+// throttleEntryTTL is how long an entry outlives its last attempt. Comfortably
+// longer than a lockout, so eviction never cuts one short.
+const throttleEntryTTL = 2 * loginLockout
+
+// sweepLocked drops entries nothing has touched recently. Called from the write
+// paths, so it costs nothing when no one is logging in. Caller holds t.mu.
+func (t *loginThrottle) sweepLocked(now time.Time) {
+	for k, e := range t.entries {
+		if !e.until.IsZero() && now.Before(e.until) {
+			continue // an active lockout is never evicted
+		}
+		if now.Sub(e.lastSeen) > throttleEntryTTL {
+			delete(t.entries, k)
+		}
+	}
 }
 
 func newLoginThrottle() *loginThrottle {
@@ -342,15 +364,19 @@ func (t *loginThrottle) blocked(r *http.Request) (bool, time.Duration) {
 func (t *loginThrottle) fail(r *http.Request) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now()
+	t.sweepLocked(now)
+
 	k := throttleKey(r)
 	e := t.entries[k]
 	if e == nil {
 		e = &throttleEntry{}
 		t.entries[k] = e
 	}
+	e.lastSeen = now
 	e.failures++
 	if e.failures >= maxLoginFailures {
-		e.until = time.Now().Add(loginLockout)
+		e.until = now.Add(loginLockout)
 		e.failures = 0
 	}
 }

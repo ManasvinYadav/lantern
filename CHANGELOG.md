@@ -9,13 +9,123 @@ good idea.
 
 ---
 
+## v0.61.0 — Resource bounds, correctness fixes & tighter defaults
+
+The second half of the audit that produced v0.60.0. That release closed the
+authentication holes; this one works through what was listed under Known
+limitations — resource bounds, a handful of correctness bugs, and two defaults
+that were more permissive than they needed to be.
+
+### Changed — read before upgrading
+
+Two changes tighten defaults and can affect an existing deployment:
+
+- **WebSocket handshakes are now restricted by origin.** Accepted from the
+  dashboard's own host, from anything in the new `LANTERN_WS_ALLOWED_ORIGINS`,
+  and from clients sending no `Origin` header (scripts and CLIs). Previously
+  every origin was accepted, so any website a user visited could open a socket
+  to their Lantern and read the live feed.
+- **The dashboard can no longer be framed from another origin.** A
+  `Content-Security-Policy` with `frame-ancestors 'self'` and
+  `X-Frame-Options: SAMEORIGIN` now ship on every response. If you embed Lantern
+  in a homepage app served from a different port, set `LANTERN_FRAME_ANCESTORS`
+  to that origin.
+
+### Fixed
+
+- **Concurrent monitor updates could orphan a goroutine.** `monitorScheduler.start`
+  stopped the old ticker and stored the new one under two separate lock holds. Two
+  concurrent `PUT /api/services/{name}/monitor` calls could both create a channel,
+  one overwriting the other in the map — leaving a ticker that ran for the lifetime
+  of the process, still writing `status_events`. The visible symptom was a deleted
+  service coming back.
+- **Concurrent ping checks could read each other's replies.** A raw ICMP socket
+  receives every echo reply the host gets, and `checkPing` took the first one
+  without checking source address, echo ID or sequence — while using a fixed
+  sequence number for every probe. Four workers pinging four hosts could each
+  report on whichever reply landed first, so a check against a dead host could
+  report `up`. Replies are now matched to their probe.
+- **The maintenance toggle could leave the flag and the audit trail disagreeing.**
+  `setMaintenanceState` performed two writes with both errors discarded. It is now
+  one transaction, and enabling maintenance twice no longer opens a second window
+  that never closes — which had been permanently excluding real downtime from
+  uptime.
+- **Restarting a container recorded a status it had no basis for.** The Docker
+  restart route inserted `status='up'` directly, bypassing `ingestStatusEvent` — so
+  no cache invalidation, no broadcast, no flap dampening, and a green card for a
+  container that had only just been asked to restart. It now goes through the
+  normal write path and records `degraded`.
+- **Deleting a service left its metrics cached** for up to 15 seconds, and a
+  service recreated under the same name inherited the old uptime figures.
+- **Schema migrations discarded every error**, making a real failure
+  indistinguishable from the expected duplicate-column no-op.
+- **The SPA fallback resolved `static/index.html` against the working directory**,
+  so running the binary from anywhere but the repository root turned every
+  client-side route into a 404 while the API kept working.
+
+### Changed — resource bounds
+
+- **The SQLite pool is bounded** (8 open, 4 idle, 1h lifetime). Unbounded, a single
+  dashboard poll across N services could open N connections that then queued for
+  the same write lock. `runStaleChecker` was also restructured to drain its result
+  set before issuing per-row queries — it previously held one connection open while
+  demanding a second, which is the shape that deadlocks against a bounded pool.
+- **Metrics computation is capped at 8 concurrent services** rather than one
+  goroutine per service.
+- **Request bodies are capped**: 64 KiB for status pushes, 1 MiB for diagnostics,
+  4 KiB for configuration writes. Only the auth endpoints had a limit before.
+- **The webhook test call has a 10s timeout.** It used `http.DefaultClient`, which
+  has none, so an endpoint that accepted the connection and never answered pinned
+  the handler indefinitely.
+- **The login throttle evicts stale entries.** Its map only shrank on a successful
+  login or an expired lockout, so a rotating source address grew it without bound.
+  Active lockouts are never evicted.
+- **History export streams** instead of loading a service's entire retained history
+  into memory first.
+- **`computeServiceMetricsUnified` stopped building 30 status buckets that all
+  three of its callers discarded** — each call was spending 30 extra maintenance
+  queries producing a value nothing read, on every uncached poll, every broadcast
+  and every Prometheus scrape.
+- **Uptime and incident calculations load maintenance windows once** instead of
+  querying per timeline segment. At `range=30d` with a 60s monitor that was on the
+  order of tens of thousands of queries in one request, on a route reachable
+  without credentials.
+
+### Added
+
+- `LANTERN_WS_ALLOWED_ORIGINS` and `LANTERN_FRAME_ANCESTORS`.
+- Tests for maintenance-window equivalence, the maintenance transaction, the
+  origin policy, throttle eviction, migration idempotence, the security headers,
+  and body-size rejection. Coverage 17.1% → 20.8%.
+
+### Known limitations
+
+- The container still runs as root by default. Docker discovery needs a socket
+  whose group ID varies per host, and ICMP monitors need `CAP_NET_RAW`; shipping
+  non-root would break both for most users. The Dockerfile documents how to opt in.
+  Note that mounting the Docker socket is already root-equivalent on the host.
+- The CSP carries `'unsafe-inline'` for scripts and styles, because the dashboard
+  is a single self-contained `index.html`.
+- Test coverage is 20.8%. The concurrency paths above are still largely covered by
+  reading rather than by tests.
+
+### Upgrade notes
+
+- No schema migration. No API changes.
+- If your dashboard is embedded in an iframe on another origin, set
+  `LANTERN_FRAME_ANCESTORS` or the frame will be blocked.
+- If anything opens a WebSocket to Lantern from a different origin, add it to
+  `LANTERN_WS_ALLOWED_ORIGINS`. Non-browser clients are unaffected.
+
+---
+
 ## v0.60.0 — Sign-in, security hardening & a rebuilt dashboard
 
 **First stable release.** Lantern gains a real sign-in gate, the dashboard has been
 rebuilt on a design-token system, and a pre-release audit found and fixed several
 authentication flaws. If you are running any earlier version, **upgrade promptly** — see
 [Security fixes](#security-fixes) below for what was reachable without credentials and
-[Upgrade notes](#upgrade-notes) for what to rotate.
+[Upgrade notes](#upgrade-notes-1) for what to rotate.
 
 ### Security fixes
 

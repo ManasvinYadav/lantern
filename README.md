@@ -19,7 +19,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.60.0)
+## Features (v0.61.0)
 
 - **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
 - **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
@@ -71,7 +71,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.60.0
+    image: ghcr.io/manasvinyadav/lantern:v0.61.0
     container_name: lantern
     restart: unless-stopped
     ports:

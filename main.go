@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -31,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.60.0"
+const version = "0.61.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -138,6 +139,19 @@ func initDB(cfg *Config) *sql.DB {
 	if err != nil {
 		log.Fatalf("failed to open database at %s: %v", cfg.DBPath, err)
 	}
+
+	// SQLite is one file with one writer. database/sql will otherwise open a
+	// fresh connection for every concurrent query, so a single dashboard poll
+	// across N services could open N connections that all then queue for the
+	// same write lock — paying the cost of concurrency without the benefit.
+	// A small pool plus WAL plus busy_timeout is the combination that behaves.
+	//
+	// The ceiling is above 1 deliberately: WAL lets readers run concurrently
+	// with the writer, and several code paths hold one connection open while
+	// issuing another query, so a pool of one would deadlock them.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxLifetime(time.Hour)
 
 	// Ensure WAL mode for better concurrent read performance. journal_mode is
 	// persisted in the database file header, so this only needs to run once
@@ -246,16 +260,12 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 		log.Fatalf("failed to apply schema: %v", err)
 	}
 
-	// Schema migration for webhook_configs updated_at column
-	_, _ = db.Exec("ALTER TABLE webhook_configs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
-
-	// Schema migration for active_monitors cert_expiry_at column (SSL expiry tracking)
-	_, _ = db.Exec("ALTER TABLE active_monitors ADD COLUMN cert_expiry_at DATETIME;")
-
-	// Schema migration for status_events latency_ms column (per-check latency).
-	// Errors are ignored: on every restart after the first this is a
-	// "duplicate column name" no-op.
-	_, _ = db.Exec("ALTER TABLE status_events ADD COLUMN latency_ms INTEGER DEFAULT 0;")
+	// Additive column migrations. Each is a no-op on every boot after the
+	// first, so the expected error is "duplicate column name" — see
+	// applyMigration, which tells that apart from a real failure.
+	applyMigration(db, "ALTER TABLE webhook_configs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
+	applyMigration(db, "ALTER TABLE active_monitors ADD COLUMN cert_expiry_at DATETIME;")
+	applyMigration(db, "ALTER TABLE status_events ADD COLUMN latency_ms INTEGER DEFAULT 0;")
 
 	// Admin credentials, sessions, and the env bootstrap (see auth.go).
 	initAuth(db, cfg)
@@ -268,6 +278,22 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 	}
 
 	return db
+}
+
+// applyMigration runs an additive schema change that is expected to be a no-op
+// on every boot after the first.
+//
+// These used to be `_, _ = db.Exec(...)`, which discarded the outcome entirely:
+// a genuine failure — a locked database, a corrupt file, a typo in a future
+// migration — was indistinguishable from the duplicate-column no-op, and the
+// column would simply be missing with nothing logged.
+func applyMigration(db *sql.DB, stmt string) {
+	if _, err := db.Exec(stmt); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return
+		}
+		log.Printf("schema migration failed: %v (statement: %s)", err, stmt)
+	}
 }
 
 // cleanupRetention deletes rows older than RetentionDays from both tables.
@@ -366,6 +392,52 @@ func isProtectedEndpoint(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// securityHeadersMiddleware sets the response headers a browser needs in order
+// to defend the dashboard on its own.
+//
+// The CSP has to carry 'unsafe-inline' for scripts and styles: the dashboard
+// ships as a single self-contained index.html with its CSS and JS inline, so a
+// nonce-based policy would mean restructuring the whole page. The directives
+// that still earn their place are default-src and connect-src — nothing can be
+// loaded from, or sent to, another origin, which is what turns a script
+// injection into a much smaller problem — plus frame-ancestors.
+//
+// frame-ancestors is 'self' rather than 'none' so the dashboard can still be
+// embedded in an iframe on its own origin. Embedding it from a different
+// origin — another homepage app on a different port, say — is blocked; set
+// LANTERN_FRAME_ANCESTORS to a space-separated source list to allow it.
+var frameAncestors = func() string {
+	if v := strings.TrimSpace(os.Getenv("LANTERN_FRAME_ANCESTORS")); v != "" {
+		return v
+	}
+	return "'self'"
+}()
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	csp := "default-src 'self'; " +
+		"script-src 'self' 'unsafe-inline'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'; " +
+		"frame-ancestors " + frameAncestors
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", csp)
+		if frameAncestors == "'self'" {
+			// The pre-CSP equivalent, for anything that does not read
+			// frame-ancestors. Omitted when an explicit list is configured,
+			// since X-Frame-Options cannot express one.
+			h.Set("X-Frame-Options", "SAMEORIGIN")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // jsonMiddleware sets the Content-Type header to application/json.
@@ -537,12 +609,49 @@ func (h *wsHub) broadcast(msg []byte) {
 	}
 }
 
+// wsExtraAllowedOrigins is an optional explicit allowlist from
+// LANTERN_WS_ALLOWED_ORIGINS (comma-separated, e.g.
+// "https://status.example.com,https://dash.example.com"). Empty — the default —
+// means same-host handshakes only.
+var wsExtraAllowedOrigins = func() map[string]bool {
+	out := map[string]bool{}
+	for _, o := range strings.Split(os.Getenv("LANTERN_WS_ALLOWED_ORIGINS"), ",") {
+		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
+			out[o] = true
+		}
+	}
+	return out
+}()
+
+// wsOriginAllowed decides whether to accept a WebSocket handshake.
+//
+// This used to return true unconditionally, which let any website on the
+// internet open a socket to a visitor's Lantern and read their live service
+// feed. SameSite=Strict covers the session-cookie path, but says nothing about
+// the default no-auth deployment, which is the common one.
+//
+// A missing Origin header is allowed: browsers always send one on a WebSocket
+// handshake, so an absent header means a non-browser client — curl, a script,
+// n8n — which is not what cross-site request forgery is about.
+func wsOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	return wsExtraAllowedOrigins[strings.ToLower(origin)]
+}
+
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// Permissive by design: Lantern is a homelab tool with no origin
-	// allowlist concept elsewhere (CORS is already AllowedOrigins: []string{"*"}).
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:     wsOriginAllowed,
 }
 
 const (
@@ -704,7 +813,7 @@ ORDER BY s.id DESC LIMIT 1`, name).Scan(&s.ServiceName, &s.Status, &msg, &s.Time
 	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint)
 	s.Maintenance = maint == 1
 
-	up7, up30, _ := getCachedOrComputeServiceMetrics(db, name)
+	up7, up30 := getCachedOrComputeServiceMetrics(db, name)
 	s.Uptime7d = up7
 	s.Uptime30d = up30
 	s.History = fetchRecentBeats(db, name, 30)
@@ -973,6 +1082,8 @@ func dispatchWebhooks(dispatcher *webhookDispatcher, db *sql.DB, cfg *Config, se
 func runStaleChecker(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+	type latest struct{ name, status, ts string }
+
 	for range ticker.C {
 		rows, err := db.Query(`
 SELECT service_name, status, timestamp
@@ -982,20 +1093,33 @@ WHERE id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
 		if err != nil {
 			continue
 		}
+
+		// Drain fully before doing anything else. This loop used to issue a
+		// maintenance lookup — and then a whole ingest, with its own writes —
+		// while the outer rows cursor was still open, holding one pooled
+		// connection and demanding a second. That is exactly the shape that
+		// deadlocks against a bounded pool.
+		var svcs []latest
 		for rows.Next() {
-			var name, status, ts string
-			rows.Scan(&name, &status, &ts)
-			var maint int
-			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", name).Scan(&maint)
-			if maint == 1 || status == "down" || status == "stale" {
+			var l latest
+			if err := rows.Scan(&l.name, &l.status, &l.ts); err != nil {
 				continue
 			}
-			t, err := time.Parse(time.RFC3339, ts)
-			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
-				ingestStatusEvent(db, cfg, dispatcher, hub, name, "down", "Service missed heartbeat timeout", time.Now().UTC(), 0)
-			}
+			svcs = append(svcs, l)
 		}
 		rows.Close()
+
+		for _, l := range svcs {
+			var maint int
+			db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", l.name).Scan(&maint)
+			if maint == 1 || l.status == "down" || l.status == "stale" {
+				continue
+			}
+			t, err := time.Parse(time.RFC3339, l.ts)
+			if err == nil && time.Since(t).Hours() > float64(cfg.StaleHours) {
+				ingestStatusEvent(db, cfg, dispatcher, hub, l.name, "down", "Service missed heartbeat timeout", time.Now().UTC(), 0)
+			}
+		}
 	}
 }
 
@@ -1033,11 +1157,20 @@ func parseTimestamp(ts string) time.Time {
 // Handlers
 // ---------------------------------------------------------------------------
 
+// Request body ceilings. Only the auth endpoints had one, so every other write
+// route would read an arbitrarily large body into memory — and, for
+// diagnostics, straight into SQLite.
+const (
+	maxStatusBody      = 64 << 10 // 64 KiB
+	maxDiagnosticsBody = 1 << 20  // 1 MiB — diagnostic runs carry log dumps
+	maxConfigBody      = 4 << 10  // 4 KiB — webhook, group, maintenance, monitor
+)
+
 // handlePostStatus handles POST /api/status.
 func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StatusEventRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxStatusBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
@@ -1123,6 +1256,9 @@ func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, h
 	return id, nil
 }
 
+// metricsFanout caps how many services have their metrics computed at once.
+const metricsFanout = 8
+
 // handleGetServices handles GET /api/services.
 // Returns the most recent status event for every known service.
 func handleGetServices(db *sql.DB, cfg *Config) http.HandlerFunc {
@@ -1180,13 +1316,20 @@ ORDER BY s.service_name ASC;`)
 			log.Printf("handleGetServices rows error: %v", err)
 		}
 
-		// Compute metrics concurrently across services using cached/unified pass
+		// Compute metrics concurrently, but bounded. One goroutine per service
+		// was fine for a dozen containers and unbounded for a host running
+		// hundreds — each one wanting its own pooled DB connection, against a
+		// pool that is now deliberately small. The semaphore is acquired before
+		// the goroutine starts so the excess waits here rather than piling up.
+		sem := make(chan struct{}, metricsFanout)
 		var wg sync.WaitGroup
 		for i := range services {
 			wg.Add(1)
+			sem <- struct{}{}
 			go func(idx int) {
 				defer wg.Done()
-				up7, up30, _ := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
+				defer func() { <-sem }()
+				up7, up30 := getCachedOrComputeServiceMetrics(db, services[idx].ServiceName)
 				services[idx].Uptime7d = up7
 				services[idx].Uptime30d = up30
 				services[idx].History = fetchRecentBeats(db, services[idx].ServiceName, 30)
@@ -1281,15 +1424,6 @@ func handleExportServiceHistory(db *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		events := []StatusEvent{}
-		for rows.Next() {
-			var e StatusEvent
-			if err := rows.Scan(&e.ID, &e.Status, &e.Message, &e.Timestamp); err != nil {
-				continue
-			}
-			events = append(events, e)
-		}
-
 		safeName := strings.Map(func(r rune) rune {
 			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
 				return r
@@ -1297,21 +1431,58 @@ func handleExportServiceHistory(db *sql.DB) http.HandlerFunc {
 			return '_'
 		}, name)
 
+		// Streamed row by row rather than accumulated. This is the only route
+		// that reads a service's entire retained history, so on a busy service
+		// with a long retention window the old slice was the largest single
+		// allocation the process would make — and it was allocated per request.
 		if format == "csv" {
 			w.Header().Set("Content-Type", "text/csv")
 			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-history.csv"`, safeName))
 			cw := csv.NewWriter(w)
-			cw.Write([]string{"id", "status", "message", "timestamp"})
-			for _, e := range events {
-				cw.Write([]string{strconv.FormatInt(e.ID, 10), e.Status, e.Message, e.Timestamp})
+			_ = cw.Write([]string{"id", "status", "message", "timestamp"})
+			for rows.Next() {
+				var e StatusEvent
+				if err := rows.Scan(&e.ID, &e.Status, &e.Message, &e.Timestamp); err != nil {
+					continue
+				}
+				_ = cw.Write([]string{strconv.FormatInt(e.ID, 10), e.Status, e.Message, e.Timestamp})
 			}
 			cw.Flush()
+			if err := rows.Err(); err != nil {
+				log.Printf("handleExportServiceHistory rows error: %v", err)
+			}
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-history.json"`, safeName))
-		json.NewEncoder(w).Encode(events)
+
+		// Hand-framed rather than json.Encoder over a slice, for the same
+		// reason: nothing here holds more than one event at a time.
+		if _, err := io.WriteString(w, "["); err != nil {
+			return
+		}
+		first := true
+		enc := json.NewEncoder(w)
+		for rows.Next() {
+			var e StatusEvent
+			if err := rows.Scan(&e.ID, &e.Status, &e.Message, &e.Timestamp); err != nil {
+				continue
+			}
+			if !first {
+				if _, err := io.WriteString(w, ","); err != nil {
+					return
+				}
+			}
+			first = false
+			if err := enc.Encode(e); err != nil {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("handleExportServiceHistory rows error: %v", err)
+		}
+		_, _ = io.WriteString(w, "]")
 	}
 }
 
@@ -1359,7 +1530,7 @@ func handleBackup(db *sql.DB) http.HandlerFunc {
 func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req DiagnosticRunRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDiagnosticsBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
@@ -1557,7 +1728,7 @@ ORDER BY s.service_name ASC;`)
 		b.WriteString("# HELP lantern_service_uptime_ratio Uptime ratio (0-1) over the given range\n")
 		b.WriteString("# TYPE lantern_service_uptime_ratio gauge\n")
 		for _, s := range services {
-			up7, up30, _ := getCachedOrComputeServiceMetrics(db, s.name)
+			up7, up30 := getCachedOrComputeServiceMetrics(db, s.name)
 			fmt.Fprintf(&b, "lantern_service_uptime_ratio{service=%q,range=\"7d\"} %.4f\n", s.name, up7/100)
 			fmt.Fprintf(&b, "lantern_service_uptime_ratio{service=%q,range=\"30d\"} %.4f\n", s.name, up30/100)
 		}
@@ -1601,8 +1772,25 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	f, err := h.staticDir.Open(path)
 	if err != nil {
-		// File not found — serve index.html so the SPA can handle routing.
-		http.ServeFile(w, r, "static/index.html")
+		// Not a real file — serve the shell so the SPA can route it itself.
+		//
+		// Served through h.staticDir rather than http.ServeFile with a literal
+		// "static/index.html": that path was resolved against the process
+		// working directory, so running the binary from anywhere other than the
+		// repository root turned every client-side route into a 404 while the
+		// API kept working — a confusing failure to diagnose.
+		idx, ierr := h.staticDir.Open("/index.html")
+		if ierr != nil {
+			http.Error(w, "dashboard assets not found", http.StatusNotFound)
+			return
+		}
+		defer idx.Close()
+		st, serr := idx.Stat()
+		if serr != nil {
+			http.Error(w, "dashboard assets not readable", http.StatusInternalServerError)
+			return
+		}
+		http.ServeContent(w, r, "index.html", st.ModTime(), idx)
 		return
 	}
 	defer f.Close()
@@ -1644,7 +1832,7 @@ func handleGetWebhooks(db *sql.DB, cfg *Config) http.HandlerFunc {
 func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json payload")
 			return
 		}
@@ -1686,13 +1874,16 @@ func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// webhookTestClient bounds the manual "send a test notification" call.
+var webhookTestClient = &http.Client{Timeout: 10 * time.Second}
+
 // handleTestWebhook handles POST /api/webhooks/test.
 func handleTestWebhook(db *sql.DB, cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Channel string `json:"channel"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
 			req.Channel = "all"
 		}
 		if req.Channel == "" {
@@ -1714,7 +1905,11 @@ func handleTestWebhook(db *sql.DB, cfg *Config) http.HandlerFunc {
 			}
 
 			body, _ := json.Marshal(payload)
-			resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+			// http.Post uses http.DefaultClient, which has no timeout at all —
+			// a webhook endpoint that accepts the connection and then never
+			// answers would pin this handler indefinitely. The dispatcher
+			// beside it has always used a bounded client; this now matches.
+			resp, err := webhookTestClient.Post(url, "application/json", bytes.NewBuffer(body))
 			if err != nil {
 				results[name] = map[string]any{"attempted": true, "success": false, "source": src, "message": err.Error()}
 				return
@@ -1914,7 +2109,7 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 			Group     string `json:"group"`
 			GroupName string `json:"group_name"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -2161,7 +2356,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/services/{name}/group", handlePutServiceGroup(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/services/{name}/metadata", handleGetServiceMetadata(db)).Methods(http.MethodGet)
 	api.Handle("/services/{name}/docker/status", handleGetDockerStatus()).Methods(http.MethodGet)
-	api.Handle("/services/{name}/docker/restart", handlePostDockerRestart(db)).Methods(http.MethodPost)
+	api.Handle("/services/{name}/docker/restart", handlePostDockerRestart(db, cfg, dispatcher, hub)).Methods(http.MethodPost)
 	api.Handle("/services/{name}/docker/logs", handleGetDockerLogs()).Methods(http.MethodGet)
 	api.Handle("/diagnostics", handlePostDiagnostics(db)).Methods(http.MethodPost)
 	api.Handle("/diagnostics", handleGetDiagnostics(db)).Methods(http.MethodGet)
@@ -2196,7 +2391,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	})
 
 	// --- Auth and Gzip compression wrap everything ---
-	return gzipMiddleware(authMiddleware(db, cfg, c.Handler(r)))
+	return securityHeadersMiddleware(gzipMiddleware(authMiddleware(db, cfg, c.Handler(r))))
 }
 
 var gzipWriterPool = sync.Pool{
