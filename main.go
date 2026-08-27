@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.61.0"
+const version = "0.62.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -67,6 +67,13 @@ type Config struct {
 	DockerDiscovery bool // LANTERN_DOCKER_DISCOVERY, default true
 	// DockerPollSeconds is how often the daemon is polled, floored at 10.
 	DockerPollSeconds int // LANTERN_DOCKER_POLL_SECONDS, default 60
+
+	// CertWarnDays and CertCriticalDays bound TLS certificate expiry
+	// reporting for HTTPS monitors. Warning annotates the check message;
+	// critical additionally degrades the service, on the grounds that a
+	// certificate days from expiry is an outage with a scheduled start time.
+	CertWarnDays     int // LANTERN_CERT_WARN_DAYS, default 30
+	CertCriticalDays int // LANTERN_CERT_CRITICAL_DAYS, default 7
 }
 
 // loadConfig reads configuration from environment variables and applies defaults.
@@ -90,6 +97,9 @@ func loadConfig() *Config {
 		// misspelled value leaves the dashboard working rather than silent.
 		DockerDiscovery:   os.Getenv("LANTERN_DOCKER_DISCOVERY") != "false",
 		DockerPollSeconds: getEnvInt("LANTERN_DOCKER_POLL_SECONDS", 60),
+
+		CertWarnDays:     getEnvInt("LANTERN_CERT_WARN_DAYS", 30),
+		CertCriticalDays: getEnvInt("LANTERN_CERT_CRITICAL_DAYS", 7),
 	}
 	// Auth is enabled implicitly when a username is configured.
 	cfg.AuthEnabled = cfg.AuthUser != ""
@@ -98,6 +108,28 @@ func loadConfig() *Config {
 	if cfg.DockerPollSeconds < 10 {
 		cfg.DockerPollSeconds = 10
 	}
+
+	// A critical threshold above the warning one would mean a certificate went
+	// critical before it ever warned. Clamp rather than reject, so a bad pair
+	// degrades to "both thresholds are the warning one" instead of refusing to
+	// boot over a monitoring nicety.
+	if cfg.CertWarnDays < 0 {
+		cfg.CertWarnDays = 0
+	}
+	if cfg.CertCriticalDays < 0 {
+		cfg.CertCriticalDays = 0
+	}
+	if cfg.CertCriticalDays > cfg.CertWarnDays {
+		log.Printf("config: LANTERN_CERT_CRITICAL_DAYS (%d) exceeds LANTERN_CERT_WARN_DAYS (%d); using %d for both",
+			cfg.CertCriticalDays, cfg.CertWarnDays, cfg.CertWarnDays)
+		cfg.CertCriticalDays = cfg.CertWarnDays
+	}
+
+	// Mirrored into package state so the read paths that classify a stored
+	// expiry date do not each have to be threaded a *Config.
+	certWarnDays = cfg.CertWarnDays
+	certCriticalDays = cfg.CertCriticalDays
+
 	return cfg
 }
 
@@ -260,6 +292,11 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 		log.Fatalf("failed to apply schema: %v", err)
 	}
 
+	// Banners and per-service alert routing (see features.go).
+	if _, err := db.Exec(featureSchema); err != nil {
+		log.Fatalf("failed to apply feature schema: %v", err)
+	}
+
 	// Additive column migrations. Each is a no-op on every boot after the
 	// first, so the expected error is "duplicate column name" — see
 	// applyMigration, which tells that apart from a real failure.
@@ -370,6 +407,16 @@ func isProtectedEndpoint(r *http.Request) bool {
 	// and a Telegram bot URL *are* the credential, so this GET leaks secrets.
 	case path == "/api/webhooks" && method == http.MethodGet:
 		return true
+	// The export describes the whole installation and can optionally carry
+	// webhook URLs; the import rewrites it. Both are administrative.
+	case strings.HasPrefix(path, "/api/config/"):
+		return true
+	// Publishing or dismissing an announcement speaks for the operator.
+	// Reading one stays open — that is the point of a status banner.
+	case path == "/api/banner" && method != http.MethodGet:
+		return true
+	case strings.HasSuffix(path, "/alerts") && method != http.MethodGet:
+		return true
 	case path == "/api/status" && method == http.MethodPost:
 		return true
 	case path == "/api/diagnostics" && method == http.MethodPost:
@@ -428,7 +475,7 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Content-Security-Policy", csp)
 		if frameAncestors == "'self'" {
 			// The pre-CSP equivalent, for anything that does not read
@@ -1061,19 +1108,24 @@ func buildDiscordEmbedPayload(service, oldStatus, newStatus, message string) []b
 func dispatchWebhooks(dispatcher *webhookDispatcher, db *sql.DB, cfg *Config, service, oldStatus, newStatus, message string) {
 	text := fmt.Sprintf("Service %s changed from %s to %s. %s", service, oldStatus, newStatus, message)
 
-	if discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord"); discordURL != "" {
+	// A service may route its alerts to a subset of channels. An empty route
+	// means every configured channel, which is what happened before routing
+	// existed — so this is inert until someone opts a service in.
+	route := alertRouteFor(db, service)
+
+	if discordURL, _ := getEffectiveWebhookURL(db, cfg, "discord"); discordURL != "" && channelAllowed(route, "discord") {
 		body := buildDiscordEmbedPayload(service, oldStatus, newStatus, message)
 		dispatcher.enqueue(webhookJob{channel: "discord", url: discordURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
 	}
-	if telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram"); telegramURL != "" {
+	if telegramURL, _ := getEffectiveWebhookURL(db, cfg, "telegram"); telegramURL != "" && channelAllowed(route, "telegram") {
 		body, _ := json.Marshal(map[string]string{"text": text})
 		dispatcher.enqueue(webhookJob{channel: "telegram", url: telegramURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
 	}
-	if gotifyURL, _ := getEffectiveWebhookURL(db, cfg, "gotify"); gotifyURL != "" {
+	if gotifyURL, _ := getEffectiveWebhookURL(db, cfg, "gotify"); gotifyURL != "" && channelAllowed(route, "gotify") {
 		body, _ := json.Marshal(map[string]string{"title": "Lantern Alert", "message": text})
 		dispatcher.enqueue(webhookJob{channel: "gotify", url: gotifyURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
 	}
-	if genericURL, _ := getEffectiveWebhookURL(db, cfg, "generic"); genericURL != "" {
+	if genericURL, _ := getEffectiveWebhookURL(db, cfg, "generic"); genericURL != "" && channelAllowed(route, "generic") {
 		body, _ := json.Marshal(map[string]string{"service": service, "old": oldStatus, "new": newStatus, "message": message})
 		dispatcher.enqueue(webhookJob{channel: "generic", url: genericURL, payload: body, service: service, oldStatus: oldStatus, newStatus: newStatus})
 	}
@@ -1157,6 +1209,25 @@ func parseTimestamp(ts string) time.Time {
 // Handlers
 // ---------------------------------------------------------------------------
 
+// decodeJSONBody reads a size-capped JSON request body into dst.
+//
+// It returns false once it has already written the response, so callers just
+// `return`. Every write route now answers a malformed or oversized body with
+// the same 400 and the same error string; previously each endpoint invented its
+// own wording ("invalid JSON body", "invalid json payload", "invalid json"),
+// which a client had to special-case per route to distinguish from a real
+// validation failure.
+//
+// MaxBytesReader also caps the read itself, so an oversized body is refused
+// while streaming rather than after being buffered.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, limit int64, dst any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "payload too large or invalid json")
+		return false
+	}
+	return true
+}
+
 // Request body ceilings. Only the auth endpoints had one, so every other write
 // route would read an arbitrarily large body into memory — and, for
 // diagnostics, straight into SQLite.
@@ -1164,14 +1235,14 @@ const (
 	maxStatusBody      = 64 << 10 // 64 KiB
 	maxDiagnosticsBody = 1 << 20  // 1 MiB — diagnostic runs carry log dumps
 	maxConfigBody      = 4 << 10  // 4 KiB — webhook, group, maintenance, monitor
+	maxImportBody      = 1 << 20  // 1 MiB — a whole installation's configuration
 )
 
 // handlePostStatus handles POST /api/status.
 func handlePostStatus(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req StatusEventRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxStatusBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		if !decodeJSONBody(w, r, maxStatusBody, &req) {
 			return
 		}
 
@@ -1530,8 +1601,7 @@ func handleBackup(db *sql.DB) http.HandlerFunc {
 func handlePostDiagnostics(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req DiagnosticRunRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDiagnosticsBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		if !decodeJSONBody(w, r, maxDiagnosticsBody, &req) {
 			return
 		}
 
@@ -1832,8 +1902,7 @@ func handleGetWebhooks(db *sql.DB, cfg *Config) http.HandlerFunc {
 func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]string
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json payload")
+		if !decodeJSONBody(w, r, maxConfigBody, &req) {
 			return
 		}
 
@@ -2109,8 +2178,7 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 			Group     string `json:"group"`
 			GroupName string `json:"group_name"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json body")
+		if !decodeJSONBody(w, r, maxConfigBody, &req) {
 			return
 		}
 		group := strings.TrimSpace(req.Group)
@@ -2369,11 +2437,22 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/services/{name}/maintenance", handleGetMaintenance(db)).Methods(http.MethodGet)
 	api.Handle("/docs", handleDocs()).Methods(http.MethodGet)
 
+	// --- Announcement banner, alert routing, config portability ---
+	api.Handle("/banner", handleGetBanner(db)).Methods(http.MethodGet)
+	api.Handle("/banner", handlePostBanner(db)).Methods(http.MethodPost)
+	api.Handle("/banner", handleDeleteBanner(db)).Methods(http.MethodDelete)
+	api.Handle("/services/{name}/alerts", handleGetServiceAlerts(db)).Methods(http.MethodGet)
+	api.Handle("/services/{name}/alerts", handlePutServiceAlerts(db)).Methods(http.MethodPut, http.MethodPost)
+	api.Handle("/config/export", handleConfigExport(db)).Methods(http.MethodGet)
+	api.Handle("/config/import", handleConfigImport(db, scheduler)).Methods(http.MethodPost)
+
 	publicApi := r.PathPrefix("/api/public").Subrouter()
 	publicApi.Use(jsonMiddleware)
 	publicApi.Handle("/services", handleGetServices(db, cfg)).Methods(http.MethodGet)
 	publicApi.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 	publicApi.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
+	// An outage notice is most useful exactly where anyone can read it.
+	publicApi.Handle("/banner", handleGetBanner(db)).Methods(http.MethodGet)
 	// /services/{name}/metadata is deliberately absent. It returns the
 	// container image, its IP, its published ports and its host mount paths —
 	// the same class of container internals isProtectedEndpoint gates

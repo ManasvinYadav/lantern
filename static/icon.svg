@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Lantern">
+  <rect width="512" height="512" rx="112" fill="#0d1117"/>
+  <!-- Amber glow behind the flame, so the mark still reads on a light home screen. -->
+  <circle cx="256" cy="268" r="132" fill="#f59e0b" opacity="0.14"/>
+  <path d="M256 96c48 64 88 100 88 160a88 88 0 0 1-176 0c0-60 40-96 88-160z" fill="#f59e0b"/>
+  <path d="M256 208c21 29 37 45 37 72a37 37 0 0 1-74 0c0-27 16-43 37-72z" fill="#fde68a"/>
+  <rect x="200" y="368" width="112" height="32" rx="16" fill="#f59e0b"/>
+</svg>

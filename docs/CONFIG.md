@@ -262,6 +262,93 @@ These bound resource exhaustion from slow or abandoned connections. They are not
 a rate limiter and not a WAF — Lantern still expects to sit on a trusted network
 or behind a reverse proxy.
 
+## TLS certificate expiry
+
+HTTPS active monitors read the peer certificate on every check and record its
+expiry date, then classify how much validity is left.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LANTERN_CERT_WARN_DAYS` | `30` | Below this, the check message carries an expiry notice. |
+| `LANTERN_CERT_CRITICAL_DAYS` | `7` | Below this, the service is additionally marked `degraded`. |
+
+| Days remaining | `cert_status` | Effect on the service |
+|---|---|---|
+| more than the warning threshold | `ok` | none |
+| at or below the warning threshold | `warning` | expiry noted in the check message |
+| at or below the critical threshold | `critical` | message, and an `up` service becomes `degraded` |
+| negative | `expired` | service is marked `down` |
+
+Degrading on `critical` is deliberate: a certificate days from expiry is an
+outage with a start date already scheduled, and degrading is what turns it into
+one alert now rather than a surprise later. `expired` marks the service `down`
+because verification is already failing for real clients even though Lantern's
+own probe still got an answer.
+
+A critical threshold above the warning one would mean a certificate went
+critical before it ever warned; that pair is clamped at startup with a log line
+rather than refused.
+
+## Per-service alert routing
+
+By default every status change notifies every configured webhook channel. A
+service can instead name the channels it should use:
+
+```bash
+curl -X PUT http://localhost:7654/api/services/db/alerts \
+  -H "Authorization: Bearer your_token_here" \
+  -H "Content-Type: application/json" \
+  -d '{"channels": ["discord", "gotify"]}'
+```
+
+Valid channels are `discord`, `telegram`, `gotify` and `generic`. A service with
+no route, or one whose route is cleared with an empty list, alerts on every
+configured channel — which is what Lantern did before routing existed, so
+upgrading changes nothing until you opt a service in.
+
+Clearing a route restores alerting everywhere rather than silencing the service.
+Silencing is what maintenance mode is for, and conflating the two would be a
+trap.
+
+## Announcements
+
+An announcement banner pins to the top of the dashboard and the public `/status`
+page. Reading it is always anonymous; publishing and dismissing require admin.
+
+```bash
+curl -X POST http://localhost:7654/api/banner \
+  -H "Authorization: Bearer your_token_here" \
+  -H "Content-Type: application/json" \
+  -d '{"level": "warning", "title": "Storage migration", "body": "02:00-04:00 UTC."}'
+```
+
+Levels are `info`, `warning` and `critical`. Only one announcement is active at
+a time: posting a new one dismisses whatever was showing, which matches how this
+is actually used — the current situation replaces the previous one rather than
+stacking on it. Dismissal records a timestamp rather than deleting the row, so
+what was announced and when survives for reconstructing an incident afterwards.
+
+## Configuration export and import
+
+`GET /api/config/export` serialises what Lantern watches and how it alerts —
+services, groups, active monitors, alert routes, maintenance flags and webhook
+channels — as portable JSON. Status history is deliberately excluded; that is an
+observation rather than configuration, and `GET /api/backup` already produces a
+full snapshot.
+
+**Secrets are redacted by default.** Webhook URLs come back as `__REDACTED__`
+unless you pass `?include_secrets=true`, because a Discord webhook URL or a
+Telegram bot URL is itself the credential, and an export that carries them is as
+sensitive as a database backup while being far easier to paste into an issue.
+
+`POST /api/config/import` applies an export. It is additive and idempotent: it
+upserts what the file describes and never deletes anything the file omits, so it
+is safe to run against a populated instance and running it twice changes nothing
+the second time. A field still holding `__REDACTED__` is skipped rather than
+written, so re-importing a redacted export does not overwrite a working webhook
+with the placeholder. Entries that fail validation are reported in a `skipped`
+array rather than aborting the whole import.
+
 ## Observability
 
 | Endpoint | Description |

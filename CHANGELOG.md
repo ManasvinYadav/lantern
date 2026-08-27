@@ -9,6 +9,84 @@ good idea.
 
 ---
 
+## v0.62.0 — Announcements, alert routing, config portability & PWA
+
+Feature release. Nothing here changes existing behaviour: every addition is
+inert until you use it.
+
+### Added
+
+- **Announcement banner.** Publish a maintenance or incident notice in one of
+  three severities; it pins to the top of the dashboard and the public `/status`
+  page. Reading is anonymous — that is the point of a status banner — while
+  publishing and dismissing require admin. One announcement is active at a time:
+  posting a new one dismisses the old, in a single transaction so there is never
+  a moment with two or with none. Dismissal is a timestamp rather than a delete,
+  so what was announced and when survives.
+  `GET|POST|DELETE /api/banner`, `GET /api/public/banner`.
+- **Per-service alert routing.** Send one service's alerts to Discord and
+  another's to Telegram. A service with no route alerts on every configured
+  channel, which is exactly what happened before routing existed — so this is
+  inert until you opt a service in, and clearing a route restores that default
+  rather than silencing the service.
+  `GET|PUT /api/services/{name}/alerts`.
+- **Configurable TLS expiry thresholds.** `LANTERN_CERT_WARN_DAYS` (default 30)
+  and `LANTERN_CERT_CRITICAL_DAYS` (default 7) replace a hardcoded 14-day
+  warning. Monitors now report `cert_status` of `ok`, `warning`, `critical` or
+  `expired`. **This changes monitor outcomes:** a certificate at or below the
+  critical threshold degrades an otherwise-`up` service, and an expired one marks
+  it `down` — verification is already failing for real clients even though
+  Lantern's own probe still got an answer.
+- **Configuration export and import.** `GET /api/config/export` serialises
+  services, groups, monitors, alert routes, maintenance flags and webhook
+  channels as portable JSON; `POST /api/config/import` restores it. Webhook URLs
+  are redacted unless `?include_secrets=true`, and an import skips fields still
+  holding the placeholder, so a redacted export round-trips without clobbering
+  live credentials. Import is additive and idempotent.
+- **Installable as a PWA.** A web app manifest, an inline SVG favicon, and the
+  meta tags needed to open standalone from a phone home screen or a desktop
+  dock. The favicon is a data URI, so it costs no request and cannot 404 behind
+  the auth gate.
+
+### Changed
+
+- Every write route now answers a malformed or oversized body with the same
+  `400` and the same `{"error": "payload too large or invalid json"}`. Each
+  endpoint previously invented its own wording, which a client had to
+  special-case per route to tell apart from a real validation failure.
+- `Referrer-Policy` is now `strict-origin-when-cross-origin` (was
+  `no-referrer`).
+
+### Fixed
+
+- The fuzzy-search scoring comment described the opposite of what the code does.
+  It claimed `"nb"` ranks `netbird` above `n8n-backup`; the function returns 34.3
+  and 49.0 respectively, because a character landing on a word boundary is worth
+  +15 and `n8n-backup` collects that twice.
+
+### Removed
+
+- References to n8n throughout comments and documentation. It was the external
+  signalling pipeline before native Docker discovery replaced it in v0.59.1; the
+  workflow file went then, the references did not.
+
+### Notes
+
+- Export/import is JSON only. YAML would mean a third-party dependency, and
+  Lantern's build has none outside the router, WebSocket, CORS and SQLite driver.
+- Test coverage 20.8% → 29.2%, including the request-size ceilings on five
+  routes and a forced mid-transaction failure proving `setMaintenanceState`
+  rolls back rather than leaving the flag and the audit trail disagreeing.
+
+### Upgrade notes
+
+- No schema migration needed; the two new tables are created on first start.
+- If you run HTTPS monitors against certificates inside 30 days of expiry, they
+  will start reporting `warning`, and inside 7 days they will degrade the
+  service. Raise or lower the thresholds with the two new variables.
+
+---
+
 ## v0.61.0 — Resource bounds, correctness fixes & tighter defaults
 
 The second half of the audit that produced v0.60.0. That release closed the
@@ -124,8 +202,8 @@ Two changes tighten defaults and can affect an existing deployment:
 **First stable release.** Lantern gains a real sign-in gate, the dashboard has been
 rebuilt on a design-token system, and a pre-release audit found and fixed several
 authentication flaws. If you are running any earlier version, **upgrade promptly** — see
-[Security fixes](#security-fixes) below for what was reachable without credentials and
-[Upgrade notes](#upgrade-notes-1) for what to rotate.
+Security fixes below for what was reachable without credentials and
+the Upgrade notes at the end of this section for what to rotate.
 
 ### Security fixes
 

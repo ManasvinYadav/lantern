@@ -410,6 +410,75 @@ status and error text. Useful for confirming whether an alert actually went out.
 
 ---
 
+## `GET /api/banner`
+Returns the active announcement, or `{"active": false}` when there is none.
+Also available anonymously at `GET /api/public/banner`, which is what the public
+status page reads.
+
+```json
+{
+  "active": true,
+  "banner": {
+    "id": 4,
+    "level": "warning",
+    "title": "Storage migration",
+    "body": "02:00-04:00 UTC.",
+    "created_at": "2026-08-27T12:51:53Z"
+  }
+}
+```
+
+## `POST /api/banner`
+Publishes an announcement, dismissing whatever was active. Requires auth.
+`level` is `info`, `warning` or `critical` and defaults to `info`; `title` is
+required. Returns `201` with the created banner.
+
+## `DELETE /api/banner`
+Dismisses the active announcement. Requires auth. Dismissal is a timestamp, not
+a delete, so the record survives.
+
+---
+
+## `GET|PUT /api/services/{name}/alerts`
+Reads or sets which webhook channels a service's alerts go to.
+
+```json
+{ "service_name": "db", "channels": ["discord", "gotify"], "routes_all": false }
+```
+
+`routes_all: true` means no route is configured, so the service alerts on every
+configured channel. `PUT` with an empty `channels` array clears the route and
+restores that default. Valid channels: `discord`, `telegram`, `gotify`,
+`generic`.
+
+---
+
+## `GET /api/config/export`
+Serialises services, groups, monitors, alert routes, maintenance flags and
+webhook channels as portable JSON. Requires auth.
+
+**Webhook URLs are redacted by default**, since they are credentials. Pass
+`?include_secrets=true` to include them, which makes the file as sensitive as a
+database backup.
+
+```bash
+curl -o lantern-config.json http://localhost:7654/api/config/export \
+  -H "Authorization: Bearer your_token_here"
+```
+
+## `POST /api/config/import`
+Applies an exported configuration. Requires auth. Additive and idempotent: it
+upserts what the file describes and never deletes what the file omits. Fields
+still holding `__REDACTED__` are skipped, so a redacted export can be re-imported
+without clobbering live credentials. Invalid entries come back in `skipped`
+rather than failing the whole import.
+
+```json
+{ "status": "ok", "applied": { "groups": 3, "monitors": 2, "alert_routes": 1, "webhooks": 0, "maintenance": 0 } }
+```
+
+---
+
 ## `GET /metrics`
 Prometheus text-exposition-format metrics. Always unauthenticated (exposes the same data as `/api/public/services`).
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -793,8 +792,7 @@ func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 			Enabled bool   `json:"enabled"`
 			Note    string `json:"note"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json")
+		if !decodeJSONBody(w, r, maxConfigBody, &req) {
 			return
 		}
 
@@ -1146,6 +1144,7 @@ var serviceScopedTables = []string{
 	"service_groups",
 	"active_monitors",
 	"api_tokens",
+	"service_alert_routes",
 }
 
 // handleDeleteService handles DELETE /api/services/{name}.

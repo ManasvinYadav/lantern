@@ -3,7 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔆 Lantern v0.61.0 — Service Dashboard</title>
+  <meta name="description" content="Lantern — self-hosted service health dashboard and status page." />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Lantern" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cpath d='M32 12c6 8 11 12.5 11 20a11 11 0 0 1-22 0c0-7.5 5-12 11-20z' fill='%23f59e0b'/%3E%3Cpath d='M32 26c2.6 3.6 4.6 5.6 4.6 9a4.6 4.6 0 0 1-9.2 0c0-3.4 2-5.4 4.6-9z' fill='%23fde68a'/%3E%3Crect x='25' y='46' width='14' height='4' rx='2' fill='%23f59e0b'/%3E%3C/svg%3E" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>🔆 Lantern v0.62.0 — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -873,6 +880,41 @@
     .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
     .maint-toggle-wrap { display: flex; align-items: center; justify-content: space-between; background: var(--panel-bg); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+    /* ---- Announcement banner --------------------------------------------
+       Three severities sharing one layout; only the accent stripe and mark
+       colour change, so the component stays one rule set rather than three. */
+    .incident-banner {
+      display: flex; align-items: flex-start; gap: var(--space-3);
+      padding: var(--space-4) var(--space-5);
+      margin-bottom: var(--space-4);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm);
+    }
+    .incident-banner.hidden { display: none; }
+    .incident-banner-mark {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); margin-top: 7px; flex-shrink: 0;
+    }
+    .incident-banner-body { flex: 1; min-width: 0; }
+    .incident-banner-title { font-weight: 600; font-size: var(--text-sm); color: var(--text-primary); }
+    .incident-banner-text {
+      font-size: var(--text-sm); color: var(--text-secondary);
+      margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .incident-banner-close {
+      background: transparent; border: none; color: var(--text-muted);
+      cursor: pointer; font-size: 13px; line-height: 1;
+      padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+    .incident-banner-close:hover { color: var(--text-primary); background: var(--panel-hover); }
+    .incident-banner[data-level="warning"] { border-left-color: var(--degraded); }
+    .incident-banner[data-level="warning"] .incident-banner-mark { background: var(--degraded); }
+    .incident-banner[data-level="critical"] { border-left-color: var(--down); }
+    .incident-banner[data-level="critical"] .incident-banner-mark { background: var(--down); }
 
     /* =====================================================================
        Modals — floating dialogs that can layer above an open drawer.
@@ -1792,6 +1834,19 @@
       <button type="button" class="btn" id="btnBannerRetry" style="font-size:11px; padding:3px 10px;">Retry now</button>
     </div>
 
+    <!-- Operator announcement. Rendered above everything else because an
+         incident notice that scrolls is a notice nobody reads. Present on the
+         public status page too, which is where it matters most. -->
+    <div class="incident-banner hidden" id="incidentBanner" role="status" aria-live="polite">
+      <div class="incident-banner-mark" aria-hidden="true"></div>
+      <div class="incident-banner-body">
+        <div class="incident-banner-title" id="incidentBannerTitle"></div>
+        <div class="incident-banner-text" id="incidentBannerText"></div>
+      </div>
+      <button type="button" class="incident-banner-close hide-public" id="incidentBannerDismiss"
+              aria-label="Dismiss announcement" title="Dismiss for everyone">&#10005;</button>
+    </div>
+
     <div class="status-banner" id="statusBanner" role="status" aria-live="polite">
       <div class="status-banner-dot"></div>
       <div class="status-banner-text">
@@ -2240,6 +2295,7 @@
       dockerRestart: (name) => `/api/services/${encodeURIComponent(name)}/docker/restart`,
       dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`,
       ws: isPublic ? '/api/public/ws' : '/ws',
+      banner: isPublic ? '/api/public/banner' : '/api/banner',
       webhookDeliveries: '/api/webhooks/deliveries',
       monitors: '/api/monitors',
       serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`,
@@ -2268,6 +2324,46 @@
         toast.classList.remove('show');
         setTimeout(() => toast.remove(), 300);
       }, 3200);
+    }
+
+    // ---- Announcement banner ---------------------------------------------
+    // Fetched alongside the service list rather than pushed, because an
+    // announcement changes on human timescales; a poll is plenty and it keeps
+    // the WebSocket payload about service state only.
+    async function loadIncidentBanner() {
+      const el = document.getElementById('incidentBanner');
+      if (!el) return;
+      try {
+        const res = await fetch(API.banner, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('banner ' + res.status);
+        const data = await res.json();
+        if (!data || !data.active || !data.banner) {
+          el.classList.add('hidden');
+          return;
+        }
+        const b = data.banner;
+        el.dataset.level = b.level || 'info';
+        document.getElementById('incidentBannerTitle').innerText = b.title || '';
+        const text = document.getElementById('incidentBannerText');
+        text.innerText = b.body || '';
+        text.style.display = b.body ? '' : 'none';
+        el.classList.remove('hidden');
+      } catch (e) {
+        // A banner that cannot be read is not worth an error state — the
+        // dashboard's own job is unaffected.
+        el.classList.add('hidden');
+      }
+    }
+
+    async function dismissIncidentBanner() {
+      try {
+        const res = await authFetch(API.banner, { method: 'DELETE', credentials: 'same-origin' });
+        if (!res.ok) throw new Error('dismiss ' + res.status);
+        document.getElementById('incidentBanner').classList.add('hidden');
+        showToast('Announcement dismissed', 'success');
+      } catch (e) {
+        showToast('Could not dismiss the announcement', 'error');
+      }
     }
 
     // Polling Manager
@@ -3487,6 +3583,7 @@
       if (isPublic) {
         renderSkeletons();
         loadData();
+        loadIncidentBanner();
         startPolling();
         connectWS();
       } else {
@@ -3640,6 +3737,9 @@
       // ---- Login gate ------------------------------------------------------
       const loginForm = document.getElementById('loginForm');
       if (loginForm) loginForm.addEventListener('submit', submitLogin);
+
+      const bannerDismiss = document.getElementById('incidentBannerDismiss');
+      if (bannerDismiss) bannerDismiss.addEventListener('click', dismissIncidentBanner);
 
       const signOutBtn = document.getElementById('btnSignOut');
       if (signOutBtn) signOutBtn.addEventListener('click', signOut);
@@ -4553,6 +4653,10 @@
       if (sessionGated()) return;
       const pulse = document.getElementById('loadingIndicator');
       if (pulse) pulse.classList.remove('loading');
+
+      // Deliberately not awaited: an announcement is independent of the
+      // service list, and a slow banner fetch should not delay the dashboard.
+      loadIncidentBanner();
       try {
         const [svcRes, grpRes] = await Promise.all([
           fetch(API.services, { credentials: 'same-origin' }),

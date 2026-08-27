@@ -247,7 +247,7 @@ func TestSecurityHeadersAreSetOnEveryResponse(t *testing.T) {
 
 	for k, want := range map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"Referrer-Policy":        "no-referrer",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
 		"X-Frame-Options":        "SAMEORIGIN",
 	} {
 		if got := rec.Header().Get(k); got != want {

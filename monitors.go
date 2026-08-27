@@ -8,7 +8,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -31,8 +30,39 @@ const (
 	maxMonitorIntervalSeconds = 3600
 	monitorCheckTimeout       = 10 * time.Second
 	monitorQueueSize          = 256
-	certExpiryWarningDays     = 14
 )
+
+// Certificate expiry thresholds, in days. Set from Config at startup; the
+// defaults here are what applies before loadConfig runs and in tests.
+var (
+	certWarnDays     = 30
+	certCriticalDays = 7
+)
+
+// Certificate lifecycle states, coarsest first.
+const (
+	certStatusOK       = "ok"
+	certStatusWarning  = "warning"
+	certStatusCritical = "critical"
+	certStatusExpired  = "expired"
+)
+
+// certStatusFor classifies how much validity a certificate has left.
+//
+// Negative days means it has already expired, which is materially different
+// from "expiring soon": clients are failing TLS verification right now.
+func certStatusFor(daysRemaining int) string {
+	switch {
+	case daysRemaining < 0:
+		return certStatusExpired
+	case daysRemaining <= certCriticalDays:
+		return certStatusCritical
+	case daysRemaining <= certWarnDays:
+		return certStatusWarning
+	default:
+		return certStatusOK
+	}
+}
 
 // ActiveMonitor is the persisted configuration for one service's active check.
 type ActiveMonitor struct {
@@ -46,7 +76,10 @@ type ActiveMonitor struct {
 	// otherwise (plain HTTP, TCP, ping, or before the first check completes).
 	CertExpiryAt      *string `json:"cert_expiry_at"`
 	CertDaysRemaining *int    `json:"cert_days_remaining"`
-	CertWarning       bool    `json:"cert_warning"`
+	// CertWarning is kept for compatibility with existing consumers: true for
+	// anything that is not "ok". CertStatus is the useful one.
+	CertWarning bool   `json:"cert_warning"`
+	CertStatus  string `json:"cert_status,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +134,25 @@ func (p *monitorPool) worker() {
 
 		if certExpiry != nil {
 			daysLeft := int(time.Until(*certExpiry).Hours() / 24)
-			if daysLeft <= certExpiryWarningDays {
-				message = fmt.Sprintf("%s — ⚠️ TLS cert expires in %d day(s) (%s)", message, daysLeft, certExpiry.Format("2006-01-02"))
+			on := certExpiry.Format("2006-01-02")
+
+			switch certStatusFor(daysLeft) {
+			case certStatusExpired:
+				// The endpoint answered us because Lantern's own client is not
+				// strict about it, but a browser is: verification fails for
+				// real users, so this is not a healthy service.
+				status = "down"
+				message = fmt.Sprintf("%s — TLS certificate EXPIRED %d day(s) ago (%s)", message, -daysLeft, on)
+			case certStatusCritical:
+				// Days from expiry is an outage with a start date already set.
+				// Degrading here is what turns it into one alert now rather
+				// than a surprise later.
+				if status == "up" {
+					status = "degraded"
+				}
+				message = fmt.Sprintf("%s — TLS certificate expires in %d day(s) (%s)", message, daysLeft, on)
+			case certStatusWarning:
+				message = fmt.Sprintf("%s — TLS certificate expires in %d day(s) (%s)", message, daysLeft, on)
 			}
 		}
 
@@ -381,7 +431,8 @@ func applyCertFields(m *ActiveMonitor, certExpiry sql.NullString) {
 	}
 	days := int(time.Until(t).Hours() / 24)
 	m.CertDaysRemaining = &days
-	m.CertWarning = days <= certExpiryWarningDays
+	m.CertStatus = certStatusFor(days)
+	m.CertWarning = m.CertStatus != certStatusOK
 }
 
 // handleGetMonitors handles GET /api/monitors — lists every configured active monitor.
@@ -456,8 +507,7 @@ func handlePutServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Handl
 			IntervalSeconds int    `json:"interval_seconds"`
 			Enabled         *bool  `json:"enabled"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxConfigBody)).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json body")
+		if !decodeJSONBody(w, r, maxConfigBody, &req) {
 			return
 		}
 

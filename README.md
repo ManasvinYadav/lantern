@@ -19,7 +19,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.61.0)
+## Features (v0.62.0)
 
 - **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
 - **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
@@ -50,6 +50,11 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 - **Service Lifecycle Controls**: Delete a service and everything Lantern has recorded about it in a single transaction, or trigger an active check on demand instead of waiting for the next tick.
 - **Design-token System**: Surface and semantic color tokens, a motion scale, a layered modal shell with real focus management, and a 4.5:1 contrast floor on every status badge.
 - **Prometheus Metrics**: A `/metrics` endpoint for scraping service status, uptime ratios, and incident counts into an existing monitoring stack.
+- **Announcement Banner**: Publish a maintenance or incident notice that pins to the top of both the dashboard and the public `/status` page, in three severities. Reading it is always anonymous — that is the point of a status banner; publishing and dismissing require admin.
+- **Per-service Alert Routing**: Send one service's alerts to Discord and another's to Telegram. A service with no route configured alerts everywhere, so existing installs behave exactly as before.
+- **Configurable TLS Expiry Thresholds**: HTTPS monitors classify certificates as `ok`/`warning`/`critical`/`expired` against `LANTERN_CERT_WARN_DAYS` and `LANTERN_CERT_CRITICAL_DAYS`. A certificate days from expiry degrades the service; an expired one marks it down.
+- **Config Export & Import**: `GET /api/config/export` serialises every service, probe, group, alert route and webhook to portable JSON; `POST /api/config/import` restores it. Secrets are redacted by default.
+- **Installable (PWA)**: A web app manifest and an inline SVG favicon, so Lantern installs to a phone home screen or a desktop dock and opens standalone.
 
 ## Screenshots
 
@@ -71,7 +76,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.61.0
+    image: ghcr.io/manasvinyadav/lantern:v0.62.0
     container_name: lantern
     restart: unless-stopped
     ports:
