@@ -12,8 +12,12 @@ a `lantern-backup-<timestamp>.db` file.
 **From the API:**
 
 ```bash
-curl -o lantern-backup.db http://localhost:7654/api/backup
+curl -o lantern-backup.db http://localhost:7654/api/backup \
+  -H "Authorization: Bearer your_token_here"
 ```
+
+`GET /api/backup` requires authentication as of v0.60.0. Pass a bearer token as
+above, or a session cookie if you are scripting against a signed-in session.
 
 Either method runs SQLite's `VACUUM INTO`, which produces a single
 consistent snapshot file even while Lantern is running and accepting writes
@@ -52,12 +56,33 @@ same idea applies: stop the process, overwrite the file at `LANTERN_DB_PATH`
 
 ## What's included
 
-Everything in the database: status history (subject to
-`LANTERN_RETENTION_DAYS`), diagnostic runs, service groups, maintenance
-windows and state, saved webhook URLs, webhook delivery history, and active
-monitor configurations (including captured TLS certificate expiry dates).
+Everything stored in the database:
 
-Nothing outside the database — environment variables, the Docker Compose
-file itself, and API tokens issued via `api_tokens` are part of the DB and
-so are included, but your `.env` file (if you use one) is not; keep that
-backed up separately if it holds secrets you'd need to reconstruct.
+- status history, subject to `LANTERN_RETENTION_DAYS`
+- diagnostic runs
+- service groups
+- maintenance state and maintenance windows
+- saved webhook URLs and the webhook delivery history
+- active monitor configurations, including captured TLS certificate expiry dates
+- the admin credential row and any per-service API tokens
+
+## What's not included
+
+Anything that lives outside the SQLite file. In particular your environment —
+`LANTERN_AUTH_TOKEN`, `LANTERN_AUTH_USER`/`PASS`, the `LANTERN_WEBHOOK_*`
+variables — and your `docker-compose.yml` or `.env`. Back those up separately if
+they hold values you would need to reconstruct.
+
+## Treat the snapshot as a secret
+
+The file is a complete copy of the database, so it contains the bcrypt hash of
+your admin password, the SHA-256 hashes of every live session token, your
+per-service API tokens, and any webhook URLs saved through the UI — and a
+Discord or Telegram webhook URL is itself a credential.
+
+Store backups with the same care as the credentials they contain: not in a
+public repository, not in a world-readable directory, and not in an object
+bucket you have not locked down. Before v0.60.0 this endpoint was reachable
+without a credential when only `LANTERN_AUTH_TOKEN` was configured; it is
+authenticated now, but any snapshot you took earlier is still as sensitive as
+its contents.

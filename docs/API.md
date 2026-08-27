@@ -6,7 +6,77 @@ heartbeats and runs optional active monitors. All three write to the same
 of where a check came from. Below is a comprehensive list of endpoints. See also
 `GET /api/docs`, a live reference page generated from the actual route table.
 
-> **Note**: Once `LANTERN_AUTH_TOKEN` or `LANTERN_AUTH_USER`/`LANTERN_AUTH_PASS` is set, mutating and administrative routes require auth — not just `POST` — including both `GET` endpoints under `/api/services/{name}/docker/*`, since they expose container internals and log content. Pass the token as `Authorization: Bearer <TOKEN>`. `/api/public/*`, `/api/health`, `/api/docs`, `/api/badge/*`, and `/metrics` are always open. See [Configuration Guide](CONFIG.md#security--authentication) for the exact route list.
+> **Note**: Once `LANTERN_AUTH_TOKEN` or `LANTERN_AUTH_USER`/`LANTERN_AUTH_PASS` is set,
+> mutating and administrative routes require auth — not just `POST`. That includes three
+> `GET` routes whose responses are themselves sensitive: `GET /api/backup` (the whole
+> database), `GET /api/webhooks` (webhook URLs, which *are* credentials), and both
+> endpoints under `/api/services/{name}/docker/*` (container internals and log content).
+> Pass a token as `Authorization: Bearer <TOKEN>`, or sign in for a session cookie.
+> See [Public endpoints](#public-endpoints) below for what stays open, and the
+> [Configuration Guide](CONFIG.md#security--authentication) for the exact route list.
+
+---
+
+## Authentication
+
+Lantern supports three credentials, checked in this order: a session cookie, a bearer
+token, then HTTP Basic Auth. Sessions exist because a browser's `WebSocket` constructor
+cannot send an `Authorization` header, so header-only auth would leave the dashboard
+falling back to polling.
+
+### `GET /api/auth/session`
+Reports whether sign-in is required and who you currently are. Always open — the SPA calls
+it before deciding whether to render the login wall.
+
+```bash
+curl -s http://localhost:7654/api/auth/session
+```
+
+```json
+{
+  "auth_required": true,
+  "authenticated": false,
+  "token_mode": false,
+  "can_setup": false
+}
+```
+
+- `auth_required` — admin credentials exist, so the login gate is active.
+- `token_mode` — only `LANTERN_AUTH_TOKEN` is configured; there is no password to type and
+  no login wall is shown.
+- `can_setup` — no credentials exist yet, so first-time setup is offered.
+
+### `POST /api/auth/login`
+Exchanges a username and password for an `HttpOnly`, `SameSite=Strict` session cookie.
+Always open. Rate limited per client address: five failures triggers a 15-minute lockout,
+answered with `429` and a `Retry-After` header.
+
+```bash
+curl -sc cookies.txt -X POST http://localhost:7654/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "your-password"}'
+```
+
+### `POST /api/auth/logout`
+Revokes the current session and clears the cookie.
+
+### `PUT /api/auth/credentials`
+Changes the admin username and/or password. Requires auth.
+
+`current_password` is required and verified whenever credentials already exist, so a
+borrowed session cannot silently change the password. A successful change revokes **every**
+session and issues a fresh one to the calling browser — other devices are signed out, yours
+is not. New passwords must be at least 8 characters.
+
+```bash
+curl -b cookies.txt -X PUT http://localhost:7654/api/auth/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "old-password", "new_password": "new-password"}'
+```
+
+When no credentials exist at all, this performs first-time setup without a current
+password — it is how you turn sign-in on from a dashboard that is currently open. If
+`LANTERN_AUTH_TOKEN` is set, that setup path additionally requires the token.
 
 ---
 
@@ -92,6 +162,10 @@ curl -s http://localhost:7654/api/services
 - `uptime_7d` and `uptime_30d` remain time-window averages over the retained history.
 - `monitor_type` is `""` for discovered or pushed services, or `http`/`tcp`/`ping` when
   an active monitor is configured.
+- `source` reports where the status came from: `monitor` when Lantern actively probes the
+  service, `docker` when container discovery saw it on the most recent pass, or `host` for
+  anything pushing to `POST /api/status`. It is derived per request, not stored, and
+  `monitor` outranks `docker`.
 
 ---
 
@@ -169,6 +243,100 @@ curl -s "http://localhost:7654/api/diagnostics?limit=5"
 
 ---
 
+## `DELETE /api/services/{name}`
+Removes Lantern's record of a service: status history, diagnostics, maintenance state and
+windows, group assignment, active monitor, and any scoped API tokens — all in one
+transaction. Returns `404` for an unknown service.
+
+This deletes Lantern's *record*, not the service itself. A container that Docker discovery
+can still see re-registers on the next poll.
+
+```bash
+curl -X DELETE http://localhost:7654/api/services/old-service \
+  -H "Authorization: Bearer your_token_here"
+```
+
+---
+
+## `POST /api/services/{name}/check`
+Runs one active-monitor probe immediately instead of waiting for the next tick. Returns
+`202 Accepted`; the result arrives over the normal WebSocket broadcast once the worker runs
+it. Returns `409` if the service has no active monitor, or its monitor is disabled.
+
+```json
+{ "status": "queued", "service_name": "nginx", "monitor_type": "http" }
+```
+
+---
+
+## `GET /api/services/{name}/metadata`
+Container and host metadata plus Lantern's own telemetry for one service: image, state,
+health, container IP, network, published ports, mounts, restart count, total events
+recorded, and last-seen time.
+
+**Requires auth once configured.** There is no public equivalent — the anonymous
+`/api/public/services/{name}/metadata` route was removed in v0.60.0 because it exposed
+container IPs, published ports and host filesystem mount paths.
+
+---
+
+## `GET /api/services/{name}/uptime?range=1h|24h|7d|30d`
+Uptime percentage, total downtime in minutes, incident count, and graph datapoints for the
+requested window. Time spent under a maintenance window is excluded from downtime.
+
+---
+
+## `GET /api/services/{name}/strip?hours=`
+Bucketed status history for the trend bar. `hours` defaults to `24`, capped at `720`; the
+response holds at most 96 buckets, each reporting its dominant status.
+
+---
+
+## `GET /api/services/{name}/incidents?range=`
+Detected `down`/`degraded` incidents with start, end, and duration in minutes, plus whether
+each fell inside a maintenance window.
+
+---
+
+## `GET|PUT /api/services/{name}/maintenance`
+Reads or sets a service's maintenance flag. Enabling it suppresses webhook alerts and opens
+a maintenance window; disabling it closes the open window.
+
+```bash
+curl -X PUT http://localhost:7654/api/services/db/maintenance \
+  -H "Authorization: Bearer your_token_here" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "note": "schema upgrade"}'
+```
+
+---
+
+## `GET /api/groups`
+Every group name and the number of services in it.
+
+## `PUT|POST /api/services/{name}/group`
+Assigns a service to a group. An empty value clears the assignment.
+
+```bash
+curl -X PUT http://localhost:7654/api/services/db/group \
+  -H "Authorization: Bearer your_token_here" \
+  -H "Content-Type: application/json" \
+  -d '{"group": "data"}'
+```
+
+---
+
+## `GET /api/activity?limit=`
+A merged, timestamp-sorted feed of every status change and webhook delivery attempt across
+all services. `limit` defaults to `50`, capped at `200`.
+
+---
+
+## `GET /api/diagnostics/{id}`
+The full stored content of one diagnostic run.
+
+---
+
 ## `GET /api/monitors`
 Lists configured active monitors.
 
@@ -196,11 +364,15 @@ Removes a service's active monitor.
 ---
 
 ## `GET /api/webhooks`
-Returns the status of configured notification integrations.
+Returns the configured notification integrations and their source (`db`, `env`, or `none`).
+
+**Requires auth.** The response contains each channel's URL in full, and a Discord webhook
+URL or Telegram bot URL is itself the credential.
 
 **Request:**
 ```bash
-curl -s http://localhost:7654/api/webhooks
+curl -s http://localhost:7654/api/webhooks \
+  -H "Authorization: Bearer your_token_here"
 ```
 
 ---
@@ -254,7 +426,17 @@ curl -s http://localhost:7654/metrics
 ---
 
 ## `GET /api/backup`
-Downloads a consistent database snapshot (`VACUUM INTO`), safe to fetch even under concurrent writes. See [Backup & Restore](BACKUP.md).
+Downloads a consistent database snapshot (`VACUUM INTO`), safe to fetch even under
+concurrent writes.
+
+**Requires auth.** The snapshot contains the bcrypt admin credential hash, session token
+hashes, per-service API tokens, and saved webhook URLs — treat the downloaded file as a
+secret. See [Backup & Restore](BACKUP.md).
+
+```bash
+curl -o lantern-backup.db http://localhost:7654/api/backup \
+  -H "Authorization: Bearer your_token_here"
+```
 
 ---
 
@@ -293,4 +475,40 @@ The ordering is deliberate: `heartbeat` arrives first so the client can update t
 incrementally before the fuller snapshot lands. Clients whose send buffer is full have
 frames dropped rather than blocking ingestion, and recover on the next update.
 
-`GET /api/public/ws` is the unauthenticated equivalent for public status pages.
+### `GET /api/public/ws`
+
+The unauthenticated socket that drives the public `/status` page. As of v0.60.0 it runs on a
+**separate hub** from `/ws` rather than sharing one, and carries strictly less:
+
+- only `status_update` frames — no `heartbeat` deltas,
+- and no `history` array.
+
+Each frame's `service` object holds `service_name`, `status`, `message`, `timestamp`,
+`last_seen`, `stale`, `maintenance`, `group_name`, `uptime_7d`, `uptime_30d`,
+`uptime_percent`, `monitor_type`, and `source`.
+
+Before v0.60.0 both paths were registered to the same hub, so the session gate on `/ws`
+achieved nothing — an anonymous client could open `/api/public/ws` and receive byte-identical
+broadcasts.
+
+---
+
+## Public endpoints
+
+Reachable with no credential, whatever else is configured:
+
+| Endpoint | Notes |
+|---|---|
+| `/status` and the static shell | Carries no service data itself; everything arrives over the API |
+| `GET /api/public/services` | Same shape as `/api/services` |
+| `GET /api/public/groups` | Same shape as `/api/groups` |
+| `GET /api/public/services/{name}/uptime` | Same shape as the gated uptime route |
+| `GET /api/public/ws` | Reduced live feed, described above |
+| `GET\|HEAD /api/badge/{service}.svg` | So badges render when embedded in a README |
+| `GET /metrics` | Prometheus scrapers do not usually send app-level auth |
+| `GET /api/health` | What the container `HEALTHCHECK` polls, with no credentials |
+| `GET /api/docs` | A static route reference |
+| `GET /api/auth/session`, `POST /api/auth/login` | Or there would be no way to sign in |
+
+`GET /api/public/services/{name}/metadata` was **removed in v0.60.0**. Use the gated
+`GET /api/services/{name}/metadata` instead.

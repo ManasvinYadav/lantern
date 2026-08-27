@@ -1,12 +1,17 @@
 # Lantern
 
-> ### ⚠️ Beta software
+> ### Stable as of v0.60.0
 >
-> Lantern is in **beta**. It runs reliably in the author's homelab, but the API and
-> database schema may still change between releases, and it has not been hardened for
-> hostile networks. Pin a version tag rather than `latest` if you depend on it, take
-> [backups](docs/BACKUP.md), and do not expose it to the public internet without putting
-> authentication in front of it. Bug reports and issues are very welcome.
+> The REST API and database schema are now considered stable, and breaking changes will
+> come with a major version bump and upgrade notes. Pinning a version tag rather than
+> `latest` is still the recommendation for anything you depend on, and
+> [backups](docs/BACKUP.md) are still a good idea.
+>
+> **On exposure:** Lantern is built for a home or private network. It ships with a
+> sign-in gate, per-request timeouts, and a deliberately small anonymous surface, but it
+> is not a hardened public-internet service — there is no rate limiting beyond the login
+> throttle, and no WAF. If you put it on the open internet, put a reverse proxy with TLS
+> in front of it and turn sign-in on. Bug reports and issues are very welcome.
 
 Lantern is a lightweight status dashboard and monitoring server built in Go. It provides a single-page application (SPA) UI with dark/light themes, native Docker container discovery, a push-based "heartbeat" API, and optional active checks for tracking service uptimes, downtimes, and maintenance windows in real time.
 
@@ -14,7 +19,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Grid View](docs/screenshots/grid-view.png)
 
-## Features (v0.59.1 beta)
+## Features (v0.60.0)
 
 - **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
 - **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
@@ -38,7 +43,12 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 - **Instant Search & Real-time Filters**: Instant substring search across service names, groups, and messages with empty-state and toast notifications.
 - **Responsive Layout**: Usable down to mobile viewport widths, not just non-overflowing.
 - **Maintenance Mode**: One-click UI toggles to silence alerts and ignore downtime during planned maintenance.
-- **Admin & Scoped API Tokens**: An admin-wide `LANTERN_AUTH_TOKEN` (settable from the dashboard's own Settings drawer) gates writes and Docker controls, plus per-service scoped tokens for automation — all while keeping public status routes unauthenticated.
+- **Sign-in with Cookie Sessions**: Set a username and password — from the environment on first boot, or from **Settings → Account & Security** on a dashboard that is currently open — and Lantern hashes them with bcrypt into SQLite and puts a login gate in front of everything except the public status surface. Sessions are `HttpOnly`, `SameSite=Strict` cookies, which is also what authenticates the live WebSocket feed, since a browser's `WebSocket` constructor cannot send an `Authorization` header. Failed logins are throttled per client address.
+- **Admin & Scoped API Tokens**: An admin-wide `LANTERN_AUTH_TOKEN` (settable from the dashboard's own Settings drawer) gates writes, Docker controls, database backups and webhook configuration, plus per-service scoped tokens for automation — all while keeping public status routes unauthenticated.
+- **Command Palette & Collapsible Groups**: `Cmd`/`Ctrl`+`K` (or `/`) opens a fuzzy-search palette over every service; group sections collapse and remember their state.
+- **Source Filters**: Every service reports whether its status comes from active monitoring, Docker discovery, or a pushed heartbeat, with one-click filtering by source.
+- **Service Lifecycle Controls**: Delete a service and everything Lantern has recorded about it in a single transaction, or trigger an active check on demand instead of waiting for the next tick.
+- **Design-token System**: Surface and semantic color tokens, a motion scale, a layered modal shell with real focus management, and a 4.5:1 contrast floor on every status badge.
 - **Prometheus Metrics**: A `/metrics` endpoint for scraping service status, uptime ratios, and incident counts into an existing monitoring stack.
 
 ## Screenshots
@@ -61,7 +71,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.59.1
+    image: ghcr.io/manasvinyadav/lantern:v0.60.0
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -113,6 +123,32 @@ Embed a live badge for any service:
 Colors follow the service's current status: green for up, red for down, amber for
 degraded, grey for maintenance or unknown.
 
+## Security
+
+Lantern has three authentication modes, and picks based on what you configure:
+
+| Configured | Behaviour |
+|---|---|
+| Nothing | Fully open. The out-of-the-box default, kept deliberately so that adding auth can never lock an existing deployment out of itself. |
+| `LANTERN_AUTH_TOKEN` | Writes, Docker controls, `GET /api/backup` and `GET /api/webhooks` require the bearer token. Dashboard reads stay open and no login wall appears. |
+| Username + password | A login gate in front of everything except the public status surface. |
+
+These stay anonymous whatever you configure, because they have to:
+`/status` and the static shell, `GET /api/public/services`, `/api/public/groups`,
+`/api/public/services/{name}/uptime`, `/api/public/ws`, `/api/badge/*`, `/metrics`,
+`/api/health`, `/api/docs`, and the two endpoints needed to sign in. The exact list is in
+the [Configuration Guide](docs/CONFIG.md#always-open).
+
+**v0.60.0 fixes several authentication flaws** found in a pre-release audit, including an
+unauthenticated admin takeover reachable when only `LANTERN_AUTH_TOKEN` was set, and a
+stored cross-site scripting flaw reachable by anyone able to push a status event. If you
+run any earlier version, upgrading is worth doing promptly — see the
+[changelog](CHANGELOG.md#v0600--sign-in-security-hardening--a-rebuilt-dashboard) for the
+full list and for what to rotate afterwards.
+
+Found something? Open an issue, or contact the maintainer privately for anything
+exploitable.
+
 ## Documentation Suite
 
 Lantern is highly configurable. Dive into the detailed guides below:
@@ -153,8 +189,16 @@ go build -ldflags="-s -w" -o lantern .
 Run the test suite with:
 
 ```bash
-go vet ./... && go test ./...
+go vet ./... && go test -race ./...
 ```
+
+CI runs `gofmt`, `go vet` and `go test -race` on every push, and the container image is
+only built if they pass.
+
+> On a 64-bit Raspberry Pi, `-race` aborts with `unsupported VMA range`: Raspberry Pi OS
+> builds its kernel with `CONFIG_ARM64_VA_BITS=39`, and ThreadSanitizer needs a wider
+> address layout. This is specific to that kernel configuration — macOS and ordinary
+> x86-64 Linux are both fine. Drop the flag when testing on the Pi and let CI cover it.
 
 ## License
 MIT License

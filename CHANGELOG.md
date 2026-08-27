@@ -2,8 +2,146 @@
 
 All notable changes to Lantern are documented here.
 
-Lantern is **beta** software: the API and database schema may still change between
-releases. Pin a version tag rather than `latest`, and take [backups](docs/BACKUP.md).
+As of v0.60.0 Lantern is **stable**: the REST API and database schema are settled, and
+breaking changes will come with a major version bump and upgrade notes. Pinning a version
+tag rather than `latest` is still recommended, and [backups](docs/BACKUP.md) are still a
+good idea.
+
+---
+
+## v0.60.0 — Sign-in, security hardening & a rebuilt dashboard
+
+**First stable release.** Lantern gains a real sign-in gate, the dashboard has been
+rebuilt on a design-token system, and a pre-release audit found and fixed several
+authentication flaws. If you are running any earlier version, **upgrade promptly** — see
+[Security fixes](#security-fixes) below for what was reachable without credentials and
+[Upgrade notes](#upgrade-notes) for what to rotate.
+
+### Security fixes
+
+Every issue below was reproduced against a running server before and after the fix.
+
+- **Unauthenticated admin takeover in token mode.** `PUT /api/auth/credentials` was not in
+  the protected-route list. With only `LANTERN_AUTH_TOKEN` configured, an anonymous caller
+  could invoke it, perform "first-time setup", and be handed a valid admin session cookie.
+  The original token kept working afterwards, so the takeover left no obvious trace. The
+  route is now gated, and setup mode additionally refuses to run when a token is configured
+  unless the caller presents it.
+- **Stored cross-site scripting in the dashboard.** A service name was interpolated into an
+  inline `onclick` handler. `escapeHtml()` had already turned apostrophes into `&#39;`, so
+  the guard that followed it matched nothing, while the HTML parser decoded the entity back
+  before the JavaScript was compiled. Anyone able to `POST /api/status` — which is
+  unauthenticated in the default open configuration — could run script in an administrator's
+  browser. Both inline handlers were replaced with data attributes and delegated listeners.
+- **The `/ws` session gate did nothing.** `/ws` was gated and `/api/public/ws` was not, but
+  both were registered to the *same* hub, so an anonymous client could open the public path
+  and receive byte-identical broadcasts. They are now separate hubs with different payloads.
+- **`GET /api/backup` was anonymous in token mode.** It returns the entire SQLite file: the
+  bcrypt credential hash, session token hashes, per-service API tokens, and saved webhook
+  URLs. Now gated.
+- **`GET /api/webhooks` was anonymous in token mode.** It returns webhook URLs in full, and
+  a Discord webhook URL or Telegram bot URL is itself the credential. Now gated.
+- **`GET /api/public/services/{name}/metadata` disclosed container internals.** The
+  anonymous route returned the container image, its IP address, its published ports and its
+  host filesystem mount paths. It has been removed; the gated
+  `GET /api/services/{name}/metadata` is unchanged.
+- **Per-service API tokens were stored in plaintext**, while session tokens had always been
+  hashed. Lookups now match a SHA-256 hash and upgrade a plaintext row in place the first
+  time it is used. The upgrade is lazy, so a token never used again stays in plaintext —
+  delete rows for tokens you no longer use.
+
+### Added
+
+- **Sign-in.** Username and password credentials, hashed with bcrypt into SQLite. Seeded
+  from `LANTERN_AUTH_USER`/`LANTERN_AUTH_PASS` on first boot only, after which the stored
+  row is authoritative — so a password changed in the dashboard is not reverted by a stale
+  environment variable on the next restart. You can also skip the environment entirely and
+  turn sign-in on from **Settings → Account & Security**.
+- **Cookie sessions.** `HttpOnly`, `SameSite=Strict`, `Secure` when the request is actually
+  HTTPS, 30-day TTL, stored as a SHA-256 hash so a copied database yields no usable session.
+  The cookie is what authenticates the live feed: a browser's `WebSocket` constructor cannot
+  send an `Authorization` header, so without it the dashboard falls back to polling.
+- **Login throttling.** Five failures from one client address triggers a 15-minute lockout,
+  answered with `429` and a `Retry-After` header.
+- **Auth endpoints:** `GET /api/auth/session`, `POST /api/auth/login`,
+  `POST /api/auth/logout`, `PUT /api/auth/credentials`. Changing credentials revokes every
+  session and re-issues one to the calling browser, so other devices sign out and yours does
+  not.
+- **`DELETE /api/services/{name}`** — removes Lantern's record of a service across all seven
+  service-scoped tables in one transaction. A container still visible to Docker discovery
+  re-registers on the next poll.
+- **`POST /api/services/{name}/check`** — runs one active-monitor probe immediately instead
+  of waiting for the next tick. Returns `202`; the result arrives over the normal broadcast.
+- **`source` on every service** — `monitor`, `docker`, or `host`, derived per request, with
+  one-click filtering on the dashboard.
+- **Command palette** (`Cmd`/`Ctrl`+`K`, or `/`) with fuzzy search across every service.
+- **Collapsible service groups** that remember their state.
+- **Design-token system**: surface and semantic color tokens, spacing, type, shadow and
+  motion scales, all keyed off the accent color.
+- **Rebuilt service cards and heartbeat pills**, a structured heartbeat popover, a global
+  status banner and metric ticker, a per-card quick-action menu, a badge embed dialog, and a
+  90-beat telemetry view with a latency breakdown.
+- **HTTP server timeouts and graceful shutdown.** `ReadHeaderTimeout` 10s, `ReadTimeout`
+  30s, `IdleTimeout` 120s; `SIGTERM`/`SIGINT` drain in-flight requests for up to 15 seconds.
+  `WriteTimeout` is deliberately unset because `GET /api/backup` streams the whole database.
+- **CI now runs the tests.** `gofmt`, `go vet` and `go test -race` gate the image build; the
+  workflow previously built and pushed without running anything.
+- Regression tests pinning every route that was reachable without credentials, in both token
+  mode and login-gate mode.
+
+### Changed
+
+- **`/api/public/ws` carries less than `/ws`.** The public socket now emits only a reduced
+  `status_update` envelope — no `heartbeat` deltas and no check history.
+- **Accessibility:** every status badge now meets a 4.5:1 contrast floor, modals trap focus
+  correctly, and `Escape` pops one layer at a time.
+- **Password managers no longer offer to autofill on the dashboard.** Closed modals and
+  drawers were `opacity: 0` but still laid out, so the hidden login form's password field
+  kept a real bounding box in the middle of the viewport and extensions anchored their
+  autofill prompt to it. Closed overlays are now `visibility: hidden` and their credential
+  inputs are disabled.
+- The WebSocket error handler closed the current socket rather than the one that errored,
+  which could kill a freshly opened connection during a reconnect.
+- Client-side monitor-target validation no longer rejects targets the server accepts.
+- Skeleton cards are purged on first real render, and every card is ranked on render so
+  search results order correctly.
+- `docker-compose.yml` documents the sign-in variables alongside the API token.
+
+### Removed
+
+- `GET /api/public/services/{name}/metadata`. See [Security fixes](#security-fixes).
+
+### Known limitations
+
+Carried into this release deliberately, and tracked for a follow-up:
+
+- No connection-pool limits on SQLite, and `GET /api/services` fans out one goroutine per
+  service. Fine at homelab scale; not tuned for hundreds of services.
+- Request bodies are unbounded on most write routes; only the auth endpoints cap their size.
+- No Content-Security-Policy or clickjacking headers yet.
+- `GET /api/services/{name}/uptime` issues a maintenance-window query per timeline segment,
+  so a wide range over a dense history is expensive. It is a public route.
+- Concurrent writes to the same service's monitor config can orphan a scheduler goroutine.
+- The race detector cannot run on a 64-bit Raspberry Pi (`CONFIG_ARM64_VA_BITS=39` versus
+  ThreadSanitizer's required 48). CI covers it on amd64.
+
+### Upgrade notes
+
+- **No schema migration is required.** The `admin_credentials` and `sessions` tables are
+  created on first start if absent.
+- **If you ran an earlier version with `LANTERN_AUTH_TOKEN` set and the dashboard reachable
+  by anyone you do not trust**, assume the database could have been downloaded via
+  `GET /api/backup`. Rotate `LANTERN_AUTH_TOKEN`, re-issue any per-service tokens, rotate
+  every webhook URL, and change your admin password if one was set.
+- **Check for unexpected admin credentials.** If `GET /api/auth/session` reports
+  `auth_required: true` and you never set a username, someone else did. Sign-in cannot be
+  turned off from the UI — delete the row directly:
+  `sqlite3 /data/lantern.db 'DELETE FROM admin_credentials; DELETE FROM sessions;'`
+- **If you consumed `/api/public/ws`**, note it no longer carries `heartbeat` frames or the
+  `history` array. Use the gated `/ws` for those.
+- **If you consumed `/api/public/services/{name}/metadata`**, switch to the gated
+  `/api/services/{name}/metadata` and supply a credential.
+- Existing `api_tokens` rows keep working and are hashed in place on first use.
 
 ---
 

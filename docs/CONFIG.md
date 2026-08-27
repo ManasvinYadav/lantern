@@ -112,7 +112,13 @@ logins are rate limited per client address.
 Change your username or password at **Settings → Account & Security**. The
 current password is required and verified; a wrong one returns `401`. A
 successful change revokes every session and issues a fresh one to the browser
-that made the change, so other devices are signed out and yours is not.
+that made the change, so other devices are signed out and yours is not. New
+passwords must be at least 8 characters.
+
+If `LANTERN_AUTH_TOKEN` is set, turning sign-in on for the first time requires
+that token. Setup mode issues an admin session to a caller who has proved
+nothing, which is only defensible when the dashboard was already wide open — on
+a token-configured deployment it would be a privilege escalation.
 
 ### What each mode gates
 
@@ -120,11 +126,26 @@ With **admin credentials set**, everything requires a session except the
 always-open surface below.
 
 With **`LANTERN_AUTH_TOKEN` alone**, only mutating and administrative routes
-require the token — `POST /api/status`, diagnostics, webhook config/test,
-group/maintenance/monitor writes, `DELETE /api/services/{name}`, and every
-`/api/services/{name}/docker/*` route (including its two `GET` endpoints,
-since they expose container internals and log content). General dashboard
-reads stay open, and no login wall appears — there is no password to type.
+require the token. Those are:
+
+- `POST /api/status` and `POST /api/diagnostics`
+- `GET`, `PUT` and `POST /api/webhooks`, and `POST /api/webhooks/test`
+- `GET /api/backup`
+- `PUT /api/auth/credentials`
+- every `/api/services/{name}/docker/*` route, including its two `GET`
+  endpoints, since they expose container internals and log content
+- non-`GET` writes to any `/group`, `/maintenance` or `/monitor` path
+- `POST` to any `/check` path
+- `DELETE /api/services/{name}`
+
+General dashboard reads stay open, and no login wall appears — there is no
+password to type.
+
+> Three of those are `GET` routes, which is easy to miss when reasoning about
+> "reads are open". `GET /api/backup` returns the entire database, and
+> `GET /api/webhooks` returns webhook URLs in full — a Discord webhook URL or a
+> Telegram bot URL *is* the credential. Both were reachable anonymously in this
+> mode before v0.60.0.
 
 With **nothing set**, Lantern is fully open. That is the out-of-the-box
 behavior and it is preserved deliberately: adding the login gate must not lock
@@ -137,9 +158,26 @@ the login gate, so scripts, n8n and CI need no changes.
 
 ### Always open
 
-`/status` and the static shell, `/api/public/*`, `/api/badge/*`, `/metrics`,
-`/api/health`, `/api/docs`, `GET /api/auth/session`, and `POST /api/auth/login`
-are reachable without any credential, regardless of configuration.
+Reachable without any credential, regardless of configuration:
+
+- `/status` and the static SPA shell
+- `GET /api/public/services`
+- `GET /api/public/groups`
+- `GET /api/public/services/{name}/uptime`
+- `GET /api/public/ws`
+- `GET` and `HEAD /api/badge/{service}.svg`
+- `GET /metrics`
+- `GET /api/health`
+- `GET /api/docs`
+- `GET /api/auth/session` and `POST /api/auth/login`
+
+The public API is enumerated route by route rather than as a blanket
+`/api/public/*` because that prefix is exempt by pattern: anything registered
+under it is anonymous by construction, so the list is the security boundary.
+`GET /api/public/services/{name}/metadata` was removed in v0.60.0 — it returned
+the container image, its IP, its published ports and its host filesystem mount
+paths to anyone who asked. The gated `GET /api/services/{name}/metadata` still
+serves that to authenticated callers.
 
 The shell is served so the login form has somewhere to render; it carries no
 service data of its own, which all arrives over the gated `/api` routes. This
@@ -147,6 +185,43 @@ is also what keeps `/status` public once you enable sign-in. `/api/health` is
 what the container `HEALTHCHECK` polls, with no credentials — gating it would
 mark the container unhealthy the moment auth was switched on. Status badges are
 intentionally anonymous so they render when embedded in a README.
+
+### The public live feed
+
+`/ws` and `/api/public/ws` are backed by **separate hubs**. The gated socket
+carries the full `status_update` payload plus per-check `heartbeat` deltas; the
+public one carries a reduced `status_update` only, with no heartbeat frames and
+no check history.
+
+This matters because before v0.60.0 both paths were registered to the same hub.
+`/ws` was gated and `/api/public/ws` was not, so the gate achieved nothing — an
+anonymous client could open the public path and receive byte-identical
+broadcasts. Enabling sign-in now genuinely restricts the live feed.
+
+### Scoped API tokens at rest
+
+Per-service tokens in `api_tokens` are matched by SHA-256 hash. A row still
+holding a plaintext token is upgraded in place the first time that token is
+used, so the existing "insert a row with `sqlite3`" workflow keeps working while
+the plaintext drains out of the table.
+
+The upgrade is lazy, which is the honest caveat: a token that is never used
+again stays in plaintext. If you have issued tokens you no longer use, delete
+the rows rather than leaving them.
+
+### Hardening notes
+
+The HTTP server sets `ReadHeaderTimeout` (10s), `ReadTimeout` (30s) and
+`IdleTimeout` (120s), so a client cannot hold a connection open indefinitely
+part-way through a request. `WriteTimeout` is deliberately unset: `GET
+/api/backup` streams the whole database and can legitimately run long on a slow
+link. `SIGTERM` and `SIGINT` drain in-flight requests for up to 15 seconds
+before the process exits, so a `docker compose down` no longer cuts a SQLite
+write mid-flight.
+
+These bound resource exhaustion from slow or abandoned connections. They are not
+a rate limiter and not a WAF — Lantern still expects to sit on a trusted network
+or behind a reverse proxy.
 
 ## Observability
 

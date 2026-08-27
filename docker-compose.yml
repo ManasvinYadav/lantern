@@ -19,7 +19,14 @@ services:
       - LANTERN_PORT=7654
       # Data retention period in days (default: 30)
       - LANTERN_RETENTION_DAYS=${LANTERN_RETENTION_DAYS:-30}
-      # API Bearer Token to secure writes/status updates (highly recommended)
+      # Sign-in credentials. Seeded into the database on FIRST BOOT ONLY; after
+      # that the stored row wins, so a password changed in the dashboard is not
+      # reverted by a stale value here. You can also leave these unset and turn
+      # sign-in on from Settings -> Account & Security.
+      # - LANTERN_AUTH_USER=admin
+      # - LANTERN_AUTH_PASS=change-me-at-least-8-chars
+      # API Bearer Token for scripts and CI. Gates writes, Docker controls,
+      # /api/backup and GET /api/webhooks, but shows no login wall.
       # - LANTERN_AUTH_TOKEN=your_super_secret_token_here
       # Path to SQLite DB inside the container
       - LANTERN_DB_PATH=/data/lantern.db

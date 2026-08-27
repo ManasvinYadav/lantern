@@ -3,6 +3,15 @@
 Lantern natively supports external notifications when a service transitions between `up`, `down`, or `degraded`.
 
 To enable a provider, set its corresponding Environment Variable in your `.env` or `docker-compose.yml`.
+You can also save URLs from **Settings → Webhooks**, which stores them in the database and
+takes precedence over the environment.
+
+> **These URLs are credentials.** A Discord webhook URL lets anyone who has it post to your
+> channel, and a Telegram URL embeds your bot token outright. `GET /api/webhooks` returns
+> them in full, so that route requires authentication as of v0.60.0 — it was reachable
+> anonymously when only `LANTERN_AUTH_TOKEN` was configured. They are also included in any
+> database snapshot from `GET /api/backup`. Do not commit them, and rotate any that have
+> been exposed.
 
 ### 1. Discord
 Create a Webhook in your Discord Server Settings -> Integrations -> Webhooks.
