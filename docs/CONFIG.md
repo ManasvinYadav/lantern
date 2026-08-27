@@ -315,6 +315,13 @@ trap.
 An announcement banner pins to the top of the dashboard and the public `/status`
 page. Reading it is always anonymous; publishing and dismissing require admin.
 
+Publish it from **Settings → Announcement**: pick a severity, write a title and an
+optional detail line, and press Publish. The panel shows what is currently live
+and prefills the form with it, so amending the wording is an edit rather than a
+retype. **Take down** removes it, as does the ✕ on the banner itself.
+
+From the API:
+
 ```bash
 curl -X POST http://localhost:7654/api/banner \
   -H "Authorization: Bearer your_token_here" \

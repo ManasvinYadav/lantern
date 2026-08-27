@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Lantern" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cpath d='M32 12c6 8 11 12.5 11 20a11 11 0 0 1-22 0c0-7.5 5-12 11-20z' fill='%23f59e0b'/%3E%3Cpath d='M32 26c2.6 3.6 4.6 5.6 4.6 9a4.6 4.6 0 0 1-9.2 0c0-3.4 2-5.4 4.6-9z' fill='%23fde68a'/%3E%3Crect x='25' y='46' width='14' height='4' rx='2' fill='%23f59e0b'/%3E%3C/svg%3E" />
   <link rel="manifest" href="/manifest.json" />
-  <title>🔆 Lantern v0.62.0 — Service Dashboard</title>
+  <title>🔆 Lantern v0.62.1 — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -2114,6 +2114,50 @@
           </form>
         </div>
 
+        <!-- Announcement Section ----------------------------------------
+             Publishing writes through /api/banner, which is gated; reading is
+             not, which is the whole point — the notice has to be visible on
+             the public status page to the people asking what is going on. -->
+        <div id="announcementSection">
+          <div class="section-label">Announcement</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+            Pins a notice to the top of this dashboard and the public status page. Anyone can read it, no sign-in needed. Publishing replaces whatever is currently showing.
+          </div>
+
+          <div class="account-state" id="announcementState" style="margin-top:12px;">
+            <span class="dot"></span><span id="announcementStateText">Checking&hellip;</span>
+          </div>
+
+          <form id="announcementForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+            <div class="form-group">
+              <label class="form-label" for="bannerLevel">Severity</label>
+              <select class="form-input" id="bannerLevel">
+                <option value="info">Info &mdash; general notice</option>
+                <option value="warning">Warning &mdash; degraded or planned work</option>
+                <option value="critical">Critical &mdash; active outage</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bannerTitle">Title</label>
+              <input type="text" class="form-input" id="bannerTitle" maxlength="120"
+                     placeholder="Storage migration" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bannerBody">Detail <span class="field-optional">optional</span></label>
+              <textarea class="form-input" id="bannerBody" rows="3" maxlength="500"
+                        placeholder="02:00&ndash;04:00 UTC. Dashboards may be briefly unavailable."></textarea>
+            </div>
+            <div class="login-error" id="bannerError" hidden role="alert"></div>
+            <div style="display:flex; gap:8px;">
+              <button type="submit" class="btn primary" id="bannerPublish" style="flex:1; justify-content:center;">
+                <span class="btn-spinner" id="bannerSpinner" hidden aria-hidden="true"></span>
+                <span id="bannerPublishLabel">Publish</span>
+              </button>
+              <button type="button" class="btn" id="bannerTakeDown" hidden>Take down</button>
+            </div>
+          </form>
+        </div>
+
         <!-- Admin API Token Section -->
         <div>
           <div class="section-label">Admin API Token</div>
@@ -2355,12 +2399,118 @@
       }
     }
 
+    // ---- Announcement authoring (Settings drawer) -------------------------
+    // Reads the same endpoint the banner itself uses, so the drawer always
+    // reflects what visitors are actually seeing rather than a local guess.
+    async function refreshAnnouncementState() {
+      const box = document.getElementById('announcementState');
+      const takeDown = document.getElementById('bannerTakeDown');
+      if (!box) return;
+
+      const label = box.querySelector('#announcementStateText');
+      try {
+        const res = await fetch(API.banner, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('banner ' + res.status);
+        const data = await res.json();
+
+        if (data && data.active && data.banner) {
+          const b = data.banner;
+          box.className = 'account-state off';
+          label.textContent = 'Showing now: ' + (b.level || 'info') + ' — ' + (b.title || '');
+          if (takeDown) takeDown.hidden = false;
+          // Prefill, so "edit the wording" is a two-word change rather than
+          // retyping the whole notice from scratch.
+          document.getElementById('bannerLevel').value = b.level || 'info';
+          document.getElementById('bannerTitle').value = b.title || '';
+          document.getElementById('bannerBody').value = b.body || '';
+        } else {
+          box.className = 'account-state on';
+          label.textContent = 'Nothing is showing. All clear.';
+          if (takeDown) takeDown.hidden = true;
+        }
+      } catch (e) {
+        box.className = 'account-state off';
+        label.textContent = 'Could not read the current announcement.';
+        if (takeDown) takeDown.hidden = true;
+      }
+    }
+
+    function setBannerError(msg) {
+      const box = document.getElementById('bannerError');
+      if (!box) return;
+      box.textContent = msg || '';
+      box.hidden = !msg;
+    }
+
+    async function submitAnnouncement(e) {
+      if (e) e.preventDefault();
+      const title = document.getElementById('bannerTitle').value.trim();
+      if (!title) {
+        setBannerError('A title is required — it is the line people actually read.');
+        return;
+      }
+
+      const btn = document.getElementById('bannerPublish');
+      const spinner = document.getElementById('bannerSpinner');
+      const label = document.getElementById('bannerPublishLabel');
+      setBannerError('');
+      setButtonLoading(btn, spinner, true);
+      if (label) label.textContent = 'Publishing…';
+
+      try {
+        const res = await authFetch(API.banner, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            level: document.getElementById('bannerLevel').value,
+            title: title,
+            body: document.getElementById('bannerBody').value.trim()
+          })
+        });
+        if (!res.ok) {
+          let msg = 'Could not publish the announcement.';
+          try { const b = await res.json(); if (b && b.error) msg = b.error; } catch (err) { /* non-JSON */ }
+          setBannerError(msg);
+          return;
+        }
+        showToast('Announcement published', 'success');
+        await refreshAnnouncementState();
+        // Reflect it immediately in the banner above rather than waiting for
+        // the next poll — the person who just published it should see it land.
+        loadIncidentBanner();
+      } catch (err) {
+        setBannerError('Could not reach the server.');
+      } finally {
+        setButtonLoading(btn, spinner, false);
+        if (label) label.textContent = 'Publish';
+      }
+    }
+
+    async function takeDownAnnouncement() {
+      setBannerError('');
+      try {
+        const res = await authFetch(API.banner, { method: 'DELETE', credentials: 'same-origin' });
+        if (!res.ok) throw new Error('dismiss ' + res.status);
+        document.getElementById('bannerTitle').value = '';
+        document.getElementById('bannerBody').value = '';
+        document.getElementById('bannerLevel').value = 'info';
+        showToast('Announcement taken down', 'success');
+        await refreshAnnouncementState();
+        loadIncidentBanner();
+      } catch (err) {
+        setBannerError('Could not take the announcement down.');
+      }
+    }
+
     async function dismissIncidentBanner() {
       try {
         const res = await authFetch(API.banner, { method: 'DELETE', credentials: 'same-origin' });
         if (!res.ok) throw new Error('dismiss ' + res.status);
         document.getElementById('incidentBanner').classList.add('hidden');
         showToast('Announcement dismissed', 'success');
+        // Keep the settings panel honest if it happens to be open behind this.
+        refreshAnnouncementState();
       } catch (e) {
         showToast('Could not dismiss the announcement', 'error');
       }
@@ -3738,6 +3888,11 @@
       const loginForm = document.getElementById('loginForm');
       if (loginForm) loginForm.addEventListener('submit', submitLogin);
 
+      const announcementForm = document.getElementById('announcementForm');
+      if (announcementForm) announcementForm.addEventListener('submit', submitAnnouncement);
+      const bannerTakeDown = document.getElementById('bannerTakeDown');
+      if (bannerTakeDown) bannerTakeDown.addEventListener('click', takeDownAnnouncement);
+
       const bannerDismiss = document.getElementById('incidentBannerDismiss');
       if (bannerDismiss) bannerDismiss.addEventListener('click', dismissIncidentBanner);
 
@@ -4345,6 +4500,7 @@
       loadWebhookSettings();
       loadWebhookDeliveries();
       loadActiveMonitors();
+      refreshAnnouncementState();
     }
 
     function saveAdminToken() {

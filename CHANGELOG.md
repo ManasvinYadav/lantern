@@ -9,6 +9,27 @@ good idea.
 
 ---
 
+## v0.62.1 — Announcement authoring UI
+
+v0.62.0 shipped the announcement banner's API and its display, but no way to
+write one from the dashboard — publishing meant a `curl` call, which is not a
+feature anyone reaches for mid-incident.
+
+### Added
+
+- **Settings → Announcement.** Severity selector, title, optional detail, and
+  Publish / Take down. The panel reads the same endpoint the banner does, so it
+  always reflects what visitors are actually seeing rather than a local guess,
+  and it prefills the form with the live announcement so amending the wording is
+  an edit rather than a retype.
+
+### Fixed
+
+- Dismissing the banner with its own ✕ now also refreshes the settings panel, so
+  the two cannot disagree about whether anything is showing.
+
+---
+
 ## v0.62.0 — Announcements, alert routing, config portability & PWA
 
 Feature release. Nothing here changes existing behaviour: every addition is
