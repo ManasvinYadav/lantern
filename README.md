@@ -17,7 +17,7 @@ Lantern is a lightweight status dashboard and monitoring server built in Go. It 
 
 It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) and compiles down to a single tiny binary or a lightweight Docker container.
 
-![Lantern Grid View](docs/screenshots/grid-view.png)
+![Lantern Dashboard](docs/screenshots/main-dashboard.png)
 
 ## Features (v0.62.1)
 
@@ -54,18 +54,18 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 - **Per-service Alert Routing**: Send one service's alerts to Discord and another's to Telegram. A service with no route configured alerts everywhere, so existing installs behave exactly as before.
 - **Configurable TLS Expiry Thresholds**: HTTPS monitors classify certificates as `ok`/`warning`/`critical`/`expired` against `LANTERN_CERT_WARN_DAYS` and `LANTERN_CERT_CRITICAL_DAYS`. A certificate days from expiry degrades the service; an expired one marks it down.
 - **Config Export & Import**: `GET /api/config/export` serialises every service, probe, group, alert route and webhook to portable JSON; `POST /api/config/import` restores it. Secrets are redacted by default.
-- **Installable (PWA)**: A web app manifest and an inline SVG favicon, so Lantern installs to a phone home screen or a desktop dock and opens standalone.
+- **Installable (PWA)**: A web app manifest and an SVG favicon, so Lantern installs to a phone home screen or a desktop dock and opens standalone.
 
 ## Screenshots
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/grid-view.png" alt="Grid View" width="400"/></td>
-    <td><img src="docs/screenshots/list-view.png" alt="List View" width="400"/></td>
+    <td><img src="docs/screenshots/container-stats.png" alt="Service drawer with container stats and uptime graph" width="400"/></td>
+    <td><img src="docs/screenshots/diagnostics.png" alt="Diagnostics drawer activity log" width="400"/></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/webhooks-modal.png" alt="Webhooks Modal" width="400"/></td>
-    <td><img src="docs/screenshots/diagnostics-drawer.png" alt="Diagnostics Drawer" width="400"/></td>
+    <td><img src="docs/screenshots/login.png" alt="Sign-in gate" width="400"/></td>
+    <td></td>
   </tr>
 </table>
 

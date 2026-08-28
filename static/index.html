@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Lantern" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1117'/%3E%3Cpath d='M32 12c6 8 11 12.5 11 20a11 11 0 0 1-22 0c0-7.5 5-12 11-20z' fill='%23f59e0b'/%3E%3Cpath d='M32 26c2.6 3.6 4.6 5.6 4.6 9a4.6 4.6 0 0 1-9.2 0c0-3.4 2-5.4 4.6-9z' fill='%23fde68a'/%3E%3Crect x='25' y='46' width='14' height='4' rx='2' fill='%23f59e0b'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="manifest" href="/manifest.json" />
   <title>🔆 Lantern v0.62.1 — Service Dashboard</title>
   <style>
@@ -1407,6 +1407,65 @@
     /* =====================================================================
        Settings Drawer & Accent Customization
        ===================================================================== */
+
+    /* Segmented tab bar. Lives between .drawer-header and .drawer-body rather
+       than inside the body, so the scroll region below it pins it for free —
+       no position:sticky, and no z-index race with the panels underneath. */
+    .settings-tabbar {
+      padding: 12px 24px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-tabs {
+      display: flex;
+      gap: 2px;
+      padding: 3px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      /* Four labels do not fit a 360px viewport. Scrolling the bar keeps the
+         overflow here instead of handing a horizontal scrollbar to the whole
+         drawer body. */
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .settings-tabs::-webkit-scrollbar { display: none; }
+    .settings-tab {
+      flex: 1 0 auto;
+      white-space: nowrap;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: var(--font-sans);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+    }
+    .settings-tab:hover { color: var(--text-primary); }
+    .settings-tab.active {
+      background: var(--panel-hover);
+      color: var(--text-primary);
+      border-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+    .settings-tab:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--accent-ring);
+    }
+
+    /* The active panel restores the column gap .drawer-body used to supply.
+       Inactive panels are display:none, so they leave no gap behind and are
+       skipped by focusablesIn()'s offsetParent filter. */
+    .settings-panel { display: none; }
+    .settings-panel.active {
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
     .form-group {
       display: flex;
       flex-direction: column;
@@ -1762,6 +1821,7 @@
 
       .drawer { width: 100vw; }
       .drawer-header, .drawer-body { padding: var(--space-4); }
+      .settings-tabbar { padding: 12px var(--space-4); }
 
       .connection-banner { flex-direction: column; align-items: stretch; text-align: center; }
     }
@@ -2063,189 +2123,205 @@
         </div>
         <button class="drawer-close" id="settingsClose">✕</button>
       </div>
+      <div class="settings-tabbar">
+        <div class="settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+          <button type="button" role="tab" data-settings-tab="general" class="settings-tab active" id="settingsTab-general" aria-controls="settingsPanel-general" aria-selected="true" tabindex="0">General</button>
+          <button type="button" role="tab" data-settings-tab="account" class="settings-tab" id="settingsTab-account" aria-controls="settingsPanel-account" aria-selected="false" tabindex="-1">Account &amp; Security</button>
+          <button type="button" role="tab" data-settings-tab="alerts" class="settings-tab" id="settingsTab-alerts" aria-controls="settingsPanel-alerts" aria-selected="false" tabindex="-1">Alerts &amp; Webhooks</button>
+          <button type="button" role="tab" data-settings-tab="monitors" class="settings-tab" id="settingsTab-monitors" aria-controls="settingsPanel-monitors" aria-selected="false" tabindex="-1">Monitors</button>
+        </div>
+      </div>
       <div class="drawer-body">
-        <!-- Account & Security -------------------------------------------
-             Changing credentials here writes to SQLite, not to the
-             environment, so it survives a container restart. The server
-             revokes every session on success and hands this tab a fresh one,
-             so other devices are signed out and this one is not. -->
-        <div id="accountSection">
-          <div class="section-label">Account &amp; Security</div>
-          <div class="account-state" id="accountState">
-            <span id="accountStateText">Checking\u2026</span>
-          </div>
-          <form id="accountForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;" autocomplete="off">
-            <div class="form-group" id="currentPasswordGroup">
-              <label class="form-label" for="acctCurrentPassword">Current password</label>
-              <div class="field-with-reveal">
-                <input type="password" class="form-input" id="acctCurrentPassword"
-                       autocomplete="current-password" placeholder="Required to make any change" />
-                <button type="button" class="field-reveal" data-reveal="acctCurrentPassword" aria-pressed="false" aria-label="Show current password" title="Show current password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="acctNewUsername">New username <span class="field-optional">optional</span></label>
-              <input type="text" class="form-input" id="acctNewUsername"
-                     autocomplete="username" autocapitalize="none" spellcheck="false"
-                     placeholder="Leave blank to keep the current one" />
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="acctNewPassword">New password <span class="field-optional" id="acctNewPasswordOptional">optional</span></label>
-              <div class="field-with-reveal">
-                <input type="password" class="form-input" id="acctNewPassword"
-                       autocomplete="new-password" placeholder="At least 8 characters" />
-                <button type="button" class="field-reveal" data-reveal="acctNewPassword" aria-pressed="false" aria-label="Show new password" title="Show new password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="acctConfirmPassword">Confirm new password</label>
-              <div class="field-with-reveal">
-                <input type="password" class="form-input" id="acctConfirmPassword"
-                       autocomplete="new-password" placeholder="Repeat the new password" />
-                <button type="button" class="field-reveal" data-reveal="acctConfirmPassword" aria-pressed="false" aria-label="Show confirmation" title="Show confirmation"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-              </div>
-              <div class="match-hint" id="acctMatchHint" hidden></div>
-            </div>
-            <div class="login-error" id="acctError" hidden role="alert"></div>
-            <button type="submit" class="btn primary" id="acctSubmit" style="justify-content:center;">
-              <span class="btn-spinner" id="acctSpinner" hidden aria-hidden="true"></span>
-              <span id="acctSubmitLabel">Update Credentials</span>
-            </button>
-          </form>
-        </div>
-
-        <!-- Announcement Section ----------------------------------------
-             Publishing writes through /api/banner, which is gated; reading is
-             not, which is the whole point — the notice has to be visible on
-             the public status page to the people asking what is going on. -->
-        <div id="announcementSection">
-          <div class="section-label">Announcement</div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-            Pins a notice to the top of this dashboard and the public status page. Anyone can read it, no sign-in needed. Publishing replaces whatever is currently showing.
-          </div>
-
-          <div class="account-state" id="announcementState" style="margin-top:12px;">
-            <span class="dot"></span><span id="announcementStateText">Checking&hellip;</span>
-          </div>
-
-          <form id="announcementForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
-            <div class="form-group">
-              <label class="form-label" for="bannerLevel">Severity</label>
-              <select class="form-input" id="bannerLevel">
-                <option value="info">Info &mdash; general notice</option>
-                <option value="warning">Warning &mdash; degraded or planned work</option>
-                <option value="critical">Critical &mdash; active outage</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="bannerTitle">Title</label>
-              <input type="text" class="form-input" id="bannerTitle" maxlength="120"
-                     placeholder="Storage migration" autocomplete="off" />
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="bannerBody">Detail <span class="field-optional">optional</span></label>
-              <textarea class="form-input" id="bannerBody" rows="3" maxlength="500"
-                        placeholder="02:00&ndash;04:00 UTC. Dashboards may be briefly unavailable."></textarea>
-            </div>
-            <div class="login-error" id="bannerError" hidden role="alert"></div>
+        <div class="settings-panel active" id="settingsPanel-general" data-settings-panel="general" role="tabpanel" aria-labelledby="settingsTab-general">
+          <!-- Theme Mode Section -->
+          <div>
+            <div class="section-label">Theme Mode</div>
             <div style="display:flex; gap:8px;">
-              <button type="submit" class="btn primary" id="bannerPublish" style="flex:1; justify-content:center;">
-                <span class="btn-spinner" id="bannerSpinner" hidden aria-hidden="true"></span>
-                <span id="bannerPublishLabel">Publish</span>
-              </button>
-              <button type="button" class="btn" id="bannerTakeDown" hidden>Take down</button>
+              <button type="button" class="btn theme-btn" data-theme-val="dark" style="flex:1; justify-content:center;">Dark</button>
+              <button type="button" class="btn theme-btn" data-theme-val="midnight" style="flex:1; justify-content:center;">Midnight</button>
+              <button type="button" class="btn theme-btn" data-theme-val="light" style="flex:1; justify-content:center;">Light</button>
             </div>
-          </form>
-        </div>
-
-        <!-- Admin API Token Section -->
-        <div>
-          <div class="section-label">Admin API Token</div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-            Only needed if LANTERN_AUTH_TOKEN or basic auth is configured on the server. Stored in this browser only, sent as an Authorization header on admin actions (maintenance, groups, webhooks, monitors, Docker controls).
-          </div>
-          <div style="display:flex; gap:8px; margin-top:10px;">
-            <input type="password" class="form-input" id="adminTokenInput" placeholder="Bearer token" style="flex:1;" autocomplete="off" />
-            <button type="button" class="btn" id="btnSaveAdminToken">Save</button>
-          </div>
-        </div>
-
-        <!-- Theme Mode Section -->
-        <div>
-          <div class="section-label">Theme Mode</div>
-          <div style="display:flex; gap:8px;">
-            <button type="button" class="btn theme-btn" data-theme-val="dark" style="flex:1; justify-content:center;">Dark</button>
-            <button type="button" class="btn theme-btn" data-theme-val="midnight" style="flex:1; justify-content:center;">Midnight</button>
-            <button type="button" class="btn theme-btn" data-theme-val="light" style="flex:1; justify-content:center;">Light</button>
-          </div>
-        </div>
-
-        <!-- Accent Color Section -->
-        <div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <div class="section-label" style="margin-bottom:0;">Accent Color</div>
-            <span id="accentHexDisplay" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Default</span>
-          </div>
-          <div class="swatch-group" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:14px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-sm);">
-            <button type="button" class="swatch-btn" data-color="#10b981" style="background:#10b981;" title="Emerald"></button>
-            <button type="button" class="swatch-btn" data-color="#3b82f6" style="background:#3b82f6;" title="Blue"></button>
-            <button type="button" class="swatch-btn" data-color="#8b5cf6" style="background:#8b5cf6;" title="Violet"></button>
-            <button type="button" class="swatch-btn" data-color="#ec4899" style="background:#ec4899;" title="Rose"></button>
-            <button type="button" class="swatch-btn" data-color="#f59e0b" style="background:#f59e0b;" title="Amber"></button>
-            <button type="button" class="swatch-btn" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></button>
-            <label style="position:relative; width:26px; height:26px; border-radius:50%; overflow:hidden; border:2px solid var(--border); cursor:pointer; display:inline-block;" title="Custom Color">
-              <input type="color" id="accentPicker" style="position:absolute; top:-10px; left:-10px; width:50px; height:50px; padding:0; border:none; cursor:pointer;" />
-            </label>
-            <button type="button" class="btn" id="btnResetAccent" style="padding:3px 8px; font-size:11px; margin-left:auto;">Reset</button>
-          </div>
-        </div>
-
-        <!-- Webhook Alerts (launcher; the form lives in #webhookModalOverlay) -->
-        <div style="padding-top:16px; border-top:1px solid var(--border);">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-            <div class="section-label" style="margin-bottom:0;">Webhook Alerts</div>
-            <button type="button" class="btn primary" id="btnOpenWebhookModal" style="font-size:11px; padding:4px 10px;">Configure</button>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
-            Discord, Telegram, Gotify and generic endpoints for status-change notifications.
-          </div>
-          <div id="webhookSummary" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;"></div>
-        </div>
-
-        <!-- Recent Delivery Log Section -->
-        <div style="padding-top:16px; border-top:1px solid var(--border);">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="section-label">Recent Delivery Log</div>
-            <button type="button" class="btn" id="btnRefreshDeliveries" style="font-size:11px; padding:4px 10px;">Refresh</button>
-          </div>
-          <div id="webhookDeliveryLog" style="font-size:12px; font-family:var(--font-mono); margin-top:8px; max-height:180px; overflow-y:auto; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
-            <span style="color:var(--text-muted);">No deliveries yet.</span>
-          </div>
-        </div>
-
-        <!-- Active Monitors (launcher; the form lives in #monitorModalOverlay) -->
-        <div style="padding-top:16px; border-top:1px solid var(--border);">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-            <div class="section-label" style="margin-bottom:0;">Active Monitors</div>
-            <button type="button" class="btn primary" id="btnOpenMonitorModal" style="font-size:11px; padding:4px 10px;">Add Monitor</button>
-          </div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
-            Optional: have Lantern check a service itself (HTTP, TCP, or ping) on a schedule, instead of waiting for it to push its own status.
           </div>
 
-          <div id="activeMonitorsList" style="font-size:12px; margin-top:14px; display:flex; flex-direction:column; gap:6px;">
-            <span style="color:var(--text-muted);">No active monitors configured.</span>
+          <!-- Accent Color Section -->
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <div class="section-label" style="margin-bottom:0;">Accent Color</div>
+              <span id="accentHexDisplay" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Default</span>
+            </div>
+            <div class="swatch-group" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:14px; background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius-sm);">
+              <button type="button" class="swatch-btn" data-color="#10b981" style="background:#10b981;" title="Emerald"></button>
+              <button type="button" class="swatch-btn" data-color="#3b82f6" style="background:#3b82f6;" title="Blue"></button>
+              <button type="button" class="swatch-btn" data-color="#8b5cf6" style="background:#8b5cf6;" title="Violet"></button>
+              <button type="button" class="swatch-btn" data-color="#ec4899" style="background:#ec4899;" title="Rose"></button>
+              <button type="button" class="swatch-btn" data-color="#f59e0b" style="background:#f59e0b;" title="Amber"></button>
+              <button type="button" class="swatch-btn" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></button>
+              <label style="position:relative; width:26px; height:26px; border-radius:50%; overflow:hidden; border:2px solid var(--border); cursor:pointer; display:inline-block;" title="Custom Color">
+                <input type="color" id="accentPicker" style="position:absolute; top:-10px; left:-10px; width:50px; height:50px; padding:0; border:none; cursor:pointer;" />
+              </label>
+              <button type="button" class="btn" id="btnResetAccent" style="padding:3px 8px; font-size:11px; margin-left:auto;">Reset</button>
+            </div>
+          </div>
+
+          <!-- Announcement Section ----------------------------------------
+               Publishing writes through /api/banner, which is gated; reading is
+               not, which is the whole point — the notice has to be visible on
+               the public status page to the people asking what is going on. -->
+          <div id="announcementSection">
+            <div class="section-label">Announcement</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Pins a notice to the top of this dashboard and the public status page. Anyone can read it, no sign-in needed. Publishing replaces whatever is currently showing.
+            </div>
+
+            <div class="account-state" id="announcementState" style="margin-top:12px;">
+              <span class="dot"></span><span id="announcementStateText">Checking&hellip;</span>
+            </div>
+
+            <form id="announcementForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label" for="bannerLevel">Severity</label>
+                <select class="form-input" id="bannerLevel">
+                  <option value="info">Info &mdash; general notice</option>
+                  <option value="warning">Warning &mdash; degraded or planned work</option>
+                  <option value="critical">Critical &mdash; active outage</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="bannerTitle">Title</label>
+                <input type="text" class="form-input" id="bannerTitle" maxlength="120"
+                       placeholder="Storage migration" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="bannerBody">Detail <span class="field-optional">optional</span></label>
+                <textarea class="form-input" id="bannerBody" rows="3" maxlength="500"
+                          placeholder="02:00&ndash;04:00 UTC. Dashboards may be briefly unavailable."></textarea>
+              </div>
+              <div class="login-error" id="bannerError" hidden role="alert"></div>
+              <div style="display:flex; gap:8px;">
+                <button type="submit" class="btn primary" id="bannerPublish" style="flex:1; justify-content:center;">
+                  <span class="btn-spinner" id="bannerSpinner" hidden aria-hidden="true"></span>
+                  <span id="bannerPublishLabel">Publish</span>
+                </button>
+                <button type="button" class="btn" id="bannerTakeDown" hidden>Take down</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Backup Section -->
+          <div style="padding-top:16px; border-top:1px solid var(--border);">
+            <div class="section-label">Backup</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Download a consistent snapshot of the full database (all services, history, settings, and webhook configs). See the README for how to restore it.
+            </div>
+            <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+              <button type="button" class="btn primary" id="btnBackupDb">Download Backup</button>
+            </div>
           </div>
         </div>
 
-        <!-- Backup Section -->
-        <div style="padding-top:16px; border-top:1px solid var(--border);">
-          <div class="section-label">Backup</div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
-            Download a consistent snapshot of the full database (all services, history, settings, and webhook configs). See the README for how to restore it.
+        <div class="settings-panel" id="settingsPanel-account" data-settings-panel="account" role="tabpanel" aria-labelledby="settingsTab-account">
+          <!-- Account & Security -------------------------------------------
+               Changing credentials here writes to SQLite, not to the
+               environment, so it survives a container restart. The server
+               revokes every session on success and hands this tab a fresh one,
+               so other devices are signed out and this one is not. -->
+          <div id="accountSection">
+            <div class="section-label">Account &amp; Security</div>
+            <div class="account-state" id="accountState">
+              <span id="accountStateText">Checking&hellip;</span>
+            </div>
+            <form id="accountForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;" autocomplete="off">
+              <div class="form-group" id="currentPasswordGroup">
+                <label class="form-label" for="acctCurrentPassword">Current password</label>
+                <div class="field-with-reveal">
+                  <input type="password" class="form-input" id="acctCurrentPassword"
+                         autocomplete="current-password" placeholder="Required to make any change" />
+                  <button type="button" class="field-reveal" data-reveal="acctCurrentPassword" aria-pressed="false" aria-label="Show current password" title="Show current password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="acctNewUsername">New username <span class="field-optional">optional</span></label>
+                <input type="text" class="form-input" id="acctNewUsername"
+                       autocomplete="username" autocapitalize="none" spellcheck="false"
+                       placeholder="Leave blank to keep the current one" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="acctNewPassword">New password <span class="field-optional" id="acctNewPasswordOptional">optional</span></label>
+                <div class="field-with-reveal">
+                  <input type="password" class="form-input" id="acctNewPassword"
+                         autocomplete="new-password" placeholder="At least 8 characters" />
+                  <button type="button" class="field-reveal" data-reveal="acctNewPassword" aria-pressed="false" aria-label="Show new password" title="Show new password"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="acctConfirmPassword">Confirm new password</label>
+                <div class="field-with-reveal">
+                  <input type="password" class="form-input" id="acctConfirmPassword"
+                         autocomplete="new-password" placeholder="Repeat the new password" />
+                  <button type="button" class="field-reveal" data-reveal="acctConfirmPassword" aria-pressed="false" aria-label="Show confirmation" title="Show confirmation"><svg class="eye-on" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                </div>
+                <div class="match-hint" id="acctMatchHint" hidden></div>
+              </div>
+              <div class="login-error" id="acctError" hidden role="alert"></div>
+              <button type="submit" class="btn primary" id="acctSubmit" style="justify-content:center;">
+                <span class="btn-spinner" id="acctSpinner" hidden aria-hidden="true"></span>
+                <span id="acctSubmitLabel">Update Credentials</span>
+              </button>
+            </form>
           </div>
-          <div style="display:flex; justify-content:flex-end; margin-top:10px;">
-            <button type="button" class="btn primary" id="btnBackupDb">Download Backup</button>
+
+          <!-- Admin API Token Section -->
+          <div>
+            <div class="section-label">Admin API Token</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Only needed if LANTERN_AUTH_TOKEN or basic auth is configured on the server. Stored in this browser only, sent as an Authorization header on admin actions (maintenance, groups, webhooks, monitors, Docker controls).
+            </div>
+            <div style="display:flex; gap:8px; margin-top:10px;">
+              <input type="password" class="form-input" id="adminTokenInput" placeholder="Bearer token" style="flex:1;" autocomplete="off" />
+              <button type="button" class="btn" id="btnSaveAdminToken">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-panel" id="settingsPanel-alerts" data-settings-panel="alerts" role="tabpanel" aria-labelledby="settingsTab-alerts">
+          <!-- Webhook Alerts (launcher; the form lives in #webhookModalOverlay) -->
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+              <div class="section-label" style="margin-bottom:0;">Webhook Alerts</div>
+              <button type="button" class="btn primary" id="btnOpenWebhookModal" style="font-size:11px; padding:4px 10px;">Configure</button>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+              Discord, Telegram, Gotify and generic endpoints for status-change notifications.
+            </div>
+            <div id="webhookSummary" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;"></div>
+          </div>
+
+          <!-- Recent Delivery Log Section -->
+          <div style="padding-top:16px; border-top:1px solid var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div class="section-label">Recent Delivery Log</div>
+              <button type="button" class="btn" id="btnRefreshDeliveries" style="font-size:11px; padding:4px 10px;">Refresh</button>
+            </div>
+            <div id="webhookDeliveryLog" style="font-size:12px; font-family:var(--font-mono); margin-top:8px; max-height:180px; overflow-y:auto; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
+              <span style="color:var(--text-muted);">No deliveries yet.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-panel" id="settingsPanel-monitors" data-settings-panel="monitors" role="tabpanel" aria-labelledby="settingsTab-monitors">
+          <!-- Active Monitors (launcher; the form lives in #monitorModalOverlay) -->
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+              <div class="section-label" style="margin-bottom:0;">Active Monitors</div>
+              <button type="button" class="btn primary" id="btnOpenMonitorModal" style="font-size:11px; padding:4px 10px;">Add Monitor</button>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+              Optional: have Lantern check a service itself (HTTP, TCP, or ping) on a schedule, instead of waiting for it to push its own status.
+            </div>
+
+            <div id="activeMonitorsList" style="font-size:12px; margin-top:14px; display:flex; flex-direction:column; gap:6px;">
+              <span style="color:var(--text-muted);">No active monitors configured.</span>
+            </div>
           </div>
         </div>
       </div>
@@ -4339,6 +4415,22 @@
         const settingsClose = document.getElementById('settingsClose');
         if (settingsClose) settingsClose.addEventListener('click', closeSettings);
 
+        const settingsTabs = document.getElementById('settingsTabs');
+        if (settingsTabs) {
+          settingsTabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-settings-tab]');
+            if (btn) switchSettingsTab(btn.dataset.settingsTab);
+          });
+          settingsTabs.addEventListener('keydown', (e) => {
+            const btn = e.target.closest('[data-settings-tab]');
+            if (!btn) return;
+            const moves = { ArrowRight: 1, ArrowLeft: -1, Home: 'first', End: 'last' };
+            if (!(e.key in moves)) return;
+            e.preventDefault();
+            moveSettingsTabFocus(btn, moves[e.key]);
+          });
+        }
+
         document.querySelectorAll('.theme-btn').forEach(btn => {
           btn.addEventListener('click', (e) => {
             const th = e.currentTarget.dataset.themeVal;
@@ -4489,6 +4581,9 @@
 
     function openSettings() {
       openDrawer('settingsDrawerOverlay');
+      // After openDrawer, not before: openOverlay() re-enables every credential
+      // field in the overlay, including the ones in tabs that are not showing.
+      switchSettingsTab('general');
       // Re-read rather than trust a cached flag: credentials may have been
       // changed from another tab since this drawer was last opened.
       fetchSession().then(() => { updateSessionChrome(); refreshAccountState(); });
@@ -5701,6 +5796,43 @@
       const names = [...new Set(state.services.map(s => s.service_name))].sort();
       sel.innerHTML = '<option value="">All Services</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
       sel.value = current;
+    }
+
+    // Settings drawer tabs. Panels are display:none rather than removed, so
+    // every element ID stays queryable whether or not its tab is showing —
+    // loadWebhookDeliveries() and friends keep working from openSettings().
+    function switchSettingsTab(name) {
+      const drawer = document.getElementById('settingsDrawer');
+      if (!drawer) return;
+      drawer.querySelectorAll('[data-settings-tab]').forEach(btn => {
+        const on = btn.dataset.settingsTab === name;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        // Roving tabindex: one stop for the whole bar, arrows move within it.
+        btn.tabIndex = on ? 0 : -1;
+      });
+      drawer.querySelectorAll('[data-settings-panel]').forEach(panel => {
+        const on = panel.dataset.settingsPanel === name;
+        panel.classList.toggle('active', on);
+        // Same switch that keeps credential fields inert in closed overlays.
+        // A password manager skips :disabled inputs, so an off-tab password
+        // field has nothing for a phantom autofill prompt to attach to.
+        setCredentialFieldsEnabled(panel, on);
+      });
+    }
+
+    // Arrow-key navigation for the tab bar, per the ARIA tabs pattern.
+    function moveSettingsTabFocus(current, delta) {
+      const tabs = Array.from(
+        document.querySelectorAll('#settingsTabs [data-settings-tab]'));
+      if (!tabs.length) return;
+      let i;
+      if (delta === 'first') i = 0;
+      else if (delta === 'last') i = tabs.length - 1;
+      else i = (tabs.indexOf(current) + delta + tabs.length) % tabs.length;
+      const next = tabs[i];
+      switchSettingsTab(next.dataset.settingsTab);
+      next.focus();
     }
 
     function switchDiagTab(tab) {
