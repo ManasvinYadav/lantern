@@ -27,7 +27,12 @@ services:
       # - LANTERN_AUTH_PASS=change-me-at-least-8-chars
       # API Bearer Token for scripts and CI. Gates writes, Docker controls,
       # /api/backup and GET /api/webhooks, but shows no login wall.
-      # - LANTERN_AUTH_TOKEN=your_super_secret_token_here
+      # Read from .env (gitignored). Empty when unset, which is the same as
+      # not configuring it. With stored admin credentials present the login
+      # gate still applies to every non-exempt route -- authRequired() is
+      # checked before the token in authMiddleware -- so this only adds a
+      # credential that scripts can send, it does not open anything up.
+      - LANTERN_AUTH_TOKEN=${LANTERN_AUTH_TOKEN:-}
       # Path to SQLite DB inside the container
       - LANTERN_DB_PATH=/data/lantern.db
       # Hours before a service is marked 'stale' if no heartbeat is received (default: 24)
