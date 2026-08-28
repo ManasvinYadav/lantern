@@ -9,6 +9,67 @@ good idea.
 
 ---
 
+## v0.62.2 — Tabbed settings, and a credential for push scripts
+
+Lantern's own behaviour is unchanged in this release. The fix is to the shipped
+`docker-compose.yml`, and the note below is worth reading if you turned sign-in
+on and something quietly stopped reporting.
+
+### Fixed
+
+- **`LANTERN_AUTH_TOKEN` is now wired through `docker-compose.yml`**, read from a
+  gitignored `.env` and defaulting to empty. It was present only as a commented
+  example, so the usual way to give a script a credential was to hand-edit the
+  compose file. Setting it does not weaken the sign-in gate: `authMiddleware`
+  evaluates `authRequired()` before the token in its fallthrough switch, so with
+  admin credentials stored, every non-exempt route still demands a session and
+  an unauthenticated `POST /api/status` is still a 401. The token only adds a
+  second accepted credential; it opens nothing that was closed.
+
+### Changed
+
+- **The settings drawer is grouped into four tabs** — General, Account &
+  Security, Alerts & Webhooks, Monitors — replacing a single column that had
+  grown to eight unrelated sections. The tab bar sits between the drawer header
+  and its scroll region, so it stays put while a panel scrolls, and it scrolls
+  horizontally on a narrow viewport rather than handing the drawer body a
+  sideways scrollbar. Credential fields in a tab that is not showing are
+  disabled, reusing the switch that already keeps them inert in a closed
+  overlay, so no password manager offers to fill a field you cannot see.
+- The browser tab icon is now `static/favicon.svg` rather than an inline
+  data URI. The installed PWA icon is unchanged.
+- Refreshed the README screenshots to the current UI.
+
+### Upgrade notes
+
+Turning sign-in on gates `POST /api/status`. Any script that pushes heartbeats
+without a credential starts receiving **401**, and because the common idiom
+
+```bash
+curl -sf -X POST "$LANTERN_URL/api/status" ... || true
+```
+
+discards both the response body and the exit code, it will keep reporting
+success while Lantern receives nothing. The services it covers stay on their
+last known status until the stale sweep marks them down `LANTERN_STALE_HOURS`
+later — 24 hours by default — which reads as several unrelated services failing
+at the same second, a day after the actual cause.
+
+If you have such a script, give it the token and stop hiding the status code:
+
+```bash
+TOKEN=$(grep -m1 '^LANTERN_AUTH_TOKEN=' /path/to/.env | cut -d= -f2-)
+code=$(curl -s -o /tmp/out -w '%{http_code}' -X POST "$LANTERN_URL/api/status" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"service_name":"my-service","status":"up"}')
+case "$code" in 2*) ;; *) echo "push failed: $code $(cat /tmp/out)" >&2; exit 1 ;; esac
+```
+
+Pushing a heartbeat for the pusher itself makes the next such breakage visible
+on the dashboard within a minute instead of a day.
+
+---
+
 ## v0.62.1 — Announcement authoring UI
 
 v0.62.0 shipped the announcement banner's API and its display, but no way to
