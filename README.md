@@ -1,11 +1,15 @@
 # Lantern
 
-> ### Stable as of v0.60.0
+> ### Current release: v0.62.3 — stable since v0.60.0
 >
-> The REST API and database schema are now considered stable, and breaking changes will
-> come with a major version bump and upgrade notes. Pinning a version tag rather than
+> The REST API and database schema are considered stable. Breaking changes will come
+> with a major version bump and upgrade notes. Pinning a version tag rather than
 > `latest` is still the recommendation for anything you depend on, and
 > [backups](docs/BACKUP.md) are still a good idea.
+>
+> **v0.62.3** adds `DOCKER_HOST` support so Lantern can connect to a socket proxy
+> over TCP instead of requiring the raw Docker socket to be mounted — see
+> [Quick Start → Using a Socket Proxy](#using-a-socket-proxy-recommended-for-security).
 >
 > **On exposure:** Lantern is built for a home or private network. It ships with a
 > sign-in gate, per-request timeouts, and a deliberately small anonymous surface, but it
