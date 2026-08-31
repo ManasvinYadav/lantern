@@ -18,9 +18,16 @@ Lantern relies entirely on Environment Variables.
 
 ## Native Docker Discovery
 
-When the Docker socket is reachable, Lantern polls the daemon itself and records a
-heartbeat for every container it finds. Containers are registered automatically the
-first time they are seen — there is nothing to configure per service.
+Lantern polls the Docker daemon and records a heartbeat for every container it
+finds. Containers are registered automatically the first time they are seen —
+there is nothing to configure per service.
+
+The daemon can be reached two ways:
+
+- **Unix socket** (default): mount `/var/run/docker.sock` into the container.
+- **TCP / socket proxy** (recommended): set `DOCKER_HOST` to point at a proxy
+  such as [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy).
+  No socket mount needed; the proxy grants only the API surface Lantern uses.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -69,9 +76,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      CONTAINERS: 1   # GET /containers/json, GET /containers/{id}/json
-      INFO: 1         # GET /info (health probe)
-      POST: 1         # POST /containers/{id}/restart
+      CONTAINERS: 1   # list containers + inspect (discovery, metadata, logs)
+      INFO: 1         # GET /info — used by the TCP availability probe
+      POST: 1         # POST /containers/{id}/restart — container restart action
     networks:
       - socket-proxy
 

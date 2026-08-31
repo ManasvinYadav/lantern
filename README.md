@@ -22,6 +22,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 ## Features (v0.62.3)
 
 - **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
+- **Socket-Proxy Support (`DOCKER_HOST`)**: Instead of mounting the raw socket, point Lantern at a [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy) over TCP via the standard `DOCKER_HOST` environment variable (`tcp://proxy:2375`). `https://` and `DOCKER_TLS_VERIFY` are also supported. Existing socket-mount deployments are unaffected — `DOCKER_HOST` is only read when set.
 - **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
 - **Per-check Latency**: Every status event records how long its check took, from all three sources — the Docker poller, active monitors, and passive pushes that supply an optional `latency_ms`.
 - **Real-time Dashboard**: A WebSocket connection pushes status changes to every open dashboard within about a second of them happening, with automatic reconnection and a manual-refresh fallback. Cards glow briefly in their status color when a live update lands.
@@ -122,10 +123,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      # Grant only what Lantern needs: container list + inspect + logs
-      CONTAINERS: 1
-      INFO: 1
-      POST: 1          # Required for container restart
+      # Grant only what Lantern needs:
+      CONTAINERS: 1   # container list + inspect (discovery, metadata, logs)
+      INFO: 1         # GET /info — TCP availability probe
+      POST: 1         # POST /containers/{id}/restart — container restart
     networks:
       - socket-proxy
 
@@ -221,6 +222,7 @@ Lantern is highly configurable. Dive into the detailed guides below:
 - 📖 **[API Reference](docs/API.md)**: Full list of endpoints, payloads, and examples.
 - ⚙️ **[Configuration Guide](docs/CONFIG.md)**: Detailed breakdown of all environment variables, auth, and database settings.
 - 🐳 **[Docker Discovery](docs/CONFIG.md#native-docker-discovery)**: How native container discovery works, its status mapping, and how to opt containers out.
+- 🔌 **[Socket Proxy Setup](docs/CONFIG.md#socket-proxy)**: How to use `DOCKER_HOST` with `docker-socket-proxy` instead of mounting the raw socket.
 - 🔔 **[Webhooks & Notifications](docs/WEBHOOKS.md)**: Setup guides for Discord, Telegram, Gotify, and generic integrations.
 - 💾 **[Backup & Restore](docs/BACKUP.md)**: How to download a consistent database snapshot and restore it.
 - 📝 **[Changelog](CHANGELOG.md)**: Release history and patch notes.
