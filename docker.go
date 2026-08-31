@@ -285,8 +285,6 @@ func dockerHTTPClient() *http.Client {
 	return dockerClient.client
 }
 
-
-
 // DockerContainerSummary matches the item returned by GET /containers/json.
 type DockerContainerSummary struct {
 	ID      string            `json:"Id"`
@@ -365,9 +363,6 @@ type DockerInspectResponse struct {
 		RW          bool   `json:"RW"`
 	} `json:"Mounts"`
 }
-
-
-
 
 // findDockerContainer searches active and stopped containers for one matching the service name.
 func findDockerContainer(client *http.Client, serviceName string) (*DockerContainerSummary, error) {
