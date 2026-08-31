@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -10,7 +12,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +82,210 @@ const dockerSocketPath = "/var/run/docker.sock"
 // allocate that much in one shot. The socket is local/trusted-only, so this
 // is defense-in-depth rather than a real remote attack surface.
 const maxLogFrameSize = 10 * 1024 * 1024 // 10MB
+
+// ---------------------------------------------------------------------------
+// Docker connection layer
+//
+// Lantern talks to the Docker daemon through a single *dockerTarget that is
+// resolved once at startup. Depending on the DOCKER_HOST environment variable
+// the transport is either:
+//
+//   - Unix socket (default, or explicit unix:///path): the classic mount at
+//     /var/run/docker.sock. The HTTP client wraps the socket in a fake
+//     "http://docker" host so the standard net/http URL parser is happy.
+//
+//   - TCP / HTTP (tcp:// or http://): plain HTTP to a remote daemon or a
+//     socket proxy such as docker-socket-proxy.
+//
+//   - TLS / HTTPS (https:// or DOCKER_TLS_VERIFY=1): mutual-TLS connection
+//     using certificates from DOCKER_CERT_PATH (defaults to ~/.docker).
+//
+// All Docker API request URLs are built through dockerURL(), which prepends
+// dockerClient.baseURL, so the rest of the file never references localhost.
+// ---------------------------------------------------------------------------
+
+// dockerTarget holds everything needed to make Docker API calls.
+type dockerTarget struct {
+	// baseURL is the scheme+host prefix for every Docker API request,
+	// e.g. "http://socket-proxy:2375" or "http://docker" (Unix socket).
+	baseURL string
+	client  *http.Client
+}
+
+// dockerClient is initialised once by initDockerClient() and then read-only.
+var dockerClient *dockerTarget
+
+// resolveDockerHost parses DOCKER_HOST (falling back to the Unix socket)
+// and returns a ready *dockerTarget. It is a pure function with no side
+// effects, which makes it directly testable.
+func resolveDockerHost() (*dockerTarget, error) {
+	host := strings.TrimSpace(os.Getenv("DOCKER_HOST"))
+
+	// --- Unix socket (default or explicit) ---
+	if host == "" || strings.HasPrefix(host, "unix://") {
+		socketPath := dockerSocketPath
+		if strings.HasPrefix(host, "unix://") {
+			socketPath = strings.TrimPrefix(host, "unix://")
+		}
+		return &dockerTarget{
+			baseURL: "http://docker",
+			client: &http.Client{
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						var d net.Dialer
+						return d.DialContext(ctx, "unix", socketPath)
+					},
+					DisableKeepAlives: true,
+				},
+				Timeout: 30 * time.Second,
+			},
+		}, nil
+	}
+
+	// --- TCP / HTTP / HTTPS ---
+	u, err := url.Parse(host)
+	if err != nil {
+		return nil, fmt.Errorf("DOCKER_HOST %q is not a valid URL: %w", host, err)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("DOCKER_HOST %q has no host component", host)
+	}
+
+	tlsVerify := os.Getenv("DOCKER_TLS_VERIFY") == "1"
+	certPath := os.Getenv("DOCKER_CERT_PATH")
+
+	var transport http.RoundTripper
+	if tlsVerify || strings.EqualFold(u.Scheme, "https") {
+		tlsCfg, err := buildDockerTLSConfig(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("DOCKER_HOST TLS setup: %w", err)
+		}
+		transport = &http.Transport{TLSClientConfig: tlsCfg, DisableKeepAlives: true}
+		u.Scheme = "https"
+	} else {
+		transport = &http.Transport{DisableKeepAlives: true}
+		u.Scheme = "http"
+	}
+
+	baseURL := u.Scheme + "://" + u.Host
+	return &dockerTarget{
+		baseURL: baseURL,
+		client:  &http.Client{Transport: transport, Timeout: 30 * time.Second},
+	}, nil
+}
+
+// buildDockerTLSConfig loads ca.pem, cert.pem, and key.pem from certPath
+// (or ~/.docker when certPath is empty) and returns a *tls.Config suitable
+// for mutual TLS with the Docker daemon.
+func buildDockerTLSConfig(certPath string) (*tls.Config, error) {
+	if certPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("cannot determine home directory for DOCKER_CERT_PATH: %w", err)
+		}
+		certPath = filepath.Join(home, ".docker")
+	}
+
+	caPEM, err := os.ReadFile(filepath.Join(certPath, "ca.pem"))
+	if err != nil {
+		return nil, fmt.Errorf("reading ca.pem from %s: %w", certPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no valid CA certificates found in %s/ca.pem", certPath)
+	}
+
+	cert, err := tls.LoadX509KeyPair(
+		filepath.Join(certPath, "cert.pem"),
+		filepath.Join(certPath, "key.pem"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading cert/key from %s: %w", certPath, err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+// initDockerClient resolves DOCKER_HOST once and stores the result in the
+// package-level dockerClient. Called from main() before any Docker API use.
+func initDockerClient() {
+	t, err := resolveDockerHost()
+	if err != nil {
+		log.Printf("docker: cannot resolve DOCKER_HOST: %v — Docker features disabled", err)
+		return
+	}
+	dockerClient = t
+
+	// Surface the effective transport so operators know what was resolved.
+	if t.baseURL == "http://docker" {
+		log.Printf("docker: transport = Unix socket (%s)", dockerSocketPath)
+	} else {
+		log.Printf("docker: transport = TCP (%s)", t.baseURL)
+	}
+}
+
+// isDockerAvailable reports whether the configured Docker endpoint is
+// reachable. For Unix sockets this checks the socket file and dials it;
+// for TCP endpoints it makes a lightweight GET /info request. Returns false
+// when dockerClient is nil (i.e. initDockerClient() encountered an error).
+func isDockerAvailable() bool {
+	if dockerClient == nil {
+		return false
+	}
+
+	// For Unix-socket clients, confirm the socket file exists and is
+	// dialable before spending a full HTTP round-trip.
+	if dockerClient.baseURL == "http://docker" {
+		info, err := os.Stat(dockerSocketPath)
+		if err != nil || info.Mode()&os.ModeSocket == 0 {
+			return false
+		}
+		conn, err := net.DialTimeout("unix", dockerSocketPath, 500*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+
+	// TCP: probe the daemon with a short-timeout GET /info.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dockerClient.baseURL+"/info", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := dockerClient.client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
+// dockerURL returns the full URL for a Docker API path, e.g.
+// dockerURL("/containers/json?all=1") → "http://socket-proxy:2375/containers/json?all=1".
+func dockerURL(path string) string {
+	if dockerClient == nil {
+		return "http://docker" + path
+	}
+	return dockerClient.baseURL + path
+}
+
+// dockerHTTPClient returns the shared HTTP client for Docker API calls.
+// Callers must not mutate the returned client.
+func dockerHTTPClient() *http.Client {
+	if dockerClient == nil {
+		return nil
+	}
+	return dockerClient.client
+}
+
+
 
 // DockerContainerSummary matches the item returned by GET /containers/json.
 type DockerContainerSummary struct {
@@ -158,33 +366,8 @@ type DockerInspectResponse struct {
 	} `json:"Mounts"`
 }
 
-// isDockerSocketAvailable checks if /var/run/docker.sock exists and is dialable.
-func isDockerSocketAvailable() bool {
-	info, err := os.Stat(dockerSocketPath)
-	if err != nil || info.Mode()&os.ModeSocket == 0 {
-		return false
-	}
-	conn, err := net.DialTimeout("unix", dockerSocketPath, 500*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
 
-// getDockerHTTPClient returns an HTTP client routed through the unix domain socket.
-func getDockerHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", dockerSocketPath)
-			},
-			DisableKeepAlives: true,
-		},
-		Timeout: 30 * time.Second,
-	}
-}
+
 
 // findDockerContainer searches active and stopped containers for one matching the service name.
 func findDockerContainer(client *http.Client, serviceName string) (*DockerContainerSummary, error) {
@@ -192,7 +375,7 @@ func findDockerContainer(client *http.Client, serviceName string) (*DockerContai
 		return nil, fmt.Errorf("docker client not available")
 	}
 
-	resp, err := client.Get("http://localhost/containers/json?all=1")
+	resp, err := client.Get(dockerURL("/containers/json?all=1"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -306,15 +489,15 @@ func handleGetDockerStatus() http.HandlerFunc {
 		vars := mux.Vars(r)
 		name := strings.TrimSpace(vars["name"])
 
-		if !isDockerSocketAvailable() {
+		if !isDockerAvailable() {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"available": false,
-				"message":   "Docker socket is not accessible",
+				"message":   "Docker endpoint is not accessible",
 			})
 			return
 		}
 
-		client := getDockerHTTPClient()
+		client := dockerHTTPClient()
 		container, err := findDockerContainer(client, name)
 		if err != nil {
 			log.Printf("handleGetDockerStatus error: %v", err)
@@ -365,12 +548,12 @@ func handlePostDockerRestart(db *sql.DB, cfg *Config, dispatcher *webhookDispatc
 			return
 		}
 
-		if !isDockerSocketAvailable() {
-			writeError(w, http.StatusServiceUnavailable, "Docker socket is not accessible")
+		if !isDockerAvailable() {
+			writeError(w, http.StatusServiceUnavailable, "Docker endpoint is not accessible")
 			return
 		}
 
-		client := getDockerHTTPClient()
+		client := dockerHTTPClient()
 		container, err := findDockerContainer(client, name)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed searching for container: %v", err))
@@ -381,7 +564,7 @@ func handlePostDockerRestart(db *sql.DB, cfg *Config, dispatcher *webhookDispatc
 			return
 		}
 
-		restartURL := fmt.Sprintf("http://localhost/containers/%s/restart?t=10", container.ID)
+		restartURL := dockerURL(fmt.Sprintf("/containers/%s/restart?t=10", container.ID))
 		resp, err := client.Post(restartURL, "application/json", nil)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("Docker restart call failed: %v", err))
@@ -426,8 +609,8 @@ func handleGetDockerLogs() http.HandlerFunc {
 			return
 		}
 
-		if !isDockerSocketAvailable() {
-			writeError(w, http.StatusServiceUnavailable, "Docker socket is not accessible")
+		if !isDockerAvailable() {
+			writeError(w, http.StatusServiceUnavailable, "Docker endpoint is not accessible")
 			return
 		}
 
@@ -438,7 +621,7 @@ func handleGetDockerLogs() http.HandlerFunc {
 			}
 		}
 
-		client := getDockerHTTPClient()
+		client := dockerHTTPClient()
 		container, err := findDockerContainer(client, name)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed searching container: %v", err))
@@ -449,7 +632,7 @@ func handleGetDockerLogs() http.HandlerFunc {
 			return
 		}
 
-		logsURL := fmt.Sprintf("http://localhost/containers/%s/logs?stdout=1&stderr=1&tail=%d&timestamps=1", container.ID, tail)
+		logsURL := dockerURL(fmt.Sprintf("/containers/%s/logs?stdout=1&stderr=1&tail=%d&timestamps=1", container.ID, tail))
 		resp, err := client.Get(logsURL)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed reading docker logs: %v", err))
@@ -555,8 +738,8 @@ func handleGetServiceMetadata(db *sql.DB) http.HandlerFunc {
 		meta.MaintenanceEnabled = (maint == 1)
 
 		// Check Docker info if available
-		if isDockerSocketAvailable() {
-			client := getDockerHTTPClient()
+		if isDockerAvailable() {
+			client := dockerHTTPClient()
 			container, err := findDockerContainer(client, name)
 			if err == nil && container != nil {
 				meta.DockerDetected = true
@@ -569,7 +752,7 @@ func handleGetServiceMetadata(db *sql.DB) http.HandlerFunc {
 				meta.State = container.State
 
 				// Perform full inspect
-				inspResp, err := client.Get(fmt.Sprintf("http://localhost/containers/%s/json", container.ID))
+				inspResp, err := client.Get(dockerURL(fmt.Sprintf("/containers/%s/json", container.ID)))
 				if err == nil && inspResp.StatusCode == http.StatusOK {
 					defer inspResp.Body.Close()
 					var insp DockerInspectResponse
@@ -727,13 +910,17 @@ func runDockerDiscovery(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, 
 		log.Printf("docker discovery: disabled via LANTERN_DOCKER_DISCOVERY")
 		return
 	}
-	if !isDockerSocketAvailable() {
-		log.Printf("docker discovery: %s unavailable, discovery inactive", dockerSocketPath)
+	if !isDockerAvailable() {
+		if dockerClient != nil && dockerClient.baseURL != "http://docker" {
+			log.Printf("docker discovery: %s unreachable, discovery inactive", dockerClient.baseURL)
+		} else {
+			log.Printf("docker discovery: %s unavailable, discovery inactive", dockerSocketPath)
+		}
 		return
 	}
 
 	interval := time.Duration(cfg.DockerPollSeconds) * time.Second
-	client := getDockerHTTPClient()
+	client := dockerHTTPClient()
 	log.Printf("docker discovery: active, polling every %s", interval)
 
 	// One pass immediately, so a restart repopulates the dashboard without
@@ -753,7 +940,7 @@ func runDockerDiscovery(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, 
 func dockerDiscoveryPass(client *http.Client, db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *wsHub) {
 	start := time.Now()
 
-	resp, err := client.Get("http://localhost/containers/json?all=1")
+	resp, err := client.Get(dockerURL("/containers/json?all=1"))
 	if err != nil {
 		log.Printf("docker discovery: list failed: %v", err)
 		return

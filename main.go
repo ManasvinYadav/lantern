@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.62.2"
+const version = "0.62.3"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -303,6 +303,9 @@ CREATE TABLE IF NOT EXISTS active_monitors (
 	applyMigration(db, "ALTER TABLE webhook_configs ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
 	applyMigration(db, "ALTER TABLE active_monitors ADD COLUMN cert_expiry_at DATETIME;")
 	applyMigration(db, "ALTER TABLE status_events ADD COLUMN latency_ms INTEGER DEFAULT 0;")
+	applyMigration(db, "ALTER TABLE active_monitors ADD COLUMN body_pattern TEXT;")
+	applyMigration(db, "ALTER TABLE active_monitors ADD COLUMN json_path TEXT;")
+	applyMigration(db, "ALTER TABLE active_monitors ADD COLUMN json_expect TEXT;")
 
 	// Admin credentials, sessions, and the env bootstrap (see auth.go).
 	initAuth(db, cfg)
@@ -2570,6 +2573,11 @@ func main() {
 
 	// Background worker for missing heartbeats
 	go runStaleChecker(db, cfg, dispatcher, hub)
+
+	// Resolve DOCKER_HOST (or fall back to Unix socket) once at startup.
+	// This must run before runDockerDiscovery and before any HTTP handler
+	// that calls isDockerAvailable() or dockerHTTPClient().
+	initDockerClient()
 
 	// Background worker that discovers and polls local Docker containers
 	go runDockerDiscovery(db, cfg, dispatcher, hub)

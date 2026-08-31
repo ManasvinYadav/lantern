@@ -9,6 +9,50 @@ good idea.
 
 ---
 
+## v0.62.3 — DOCKER_HOST support for socket proxies (closes #2)
+
+Users running a **socket proxy** (such as
+[`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)) can
+now point Lantern at the proxy's TCP endpoint instead of mounting the raw
+`/var/run/docker.sock`. Set `DOCKER_HOST` and Lantern picks it up automatically
+— no other configuration is needed, and existing deployments that mount the
+socket are completely unaffected.
+
+### Added
+
+- **`DOCKER_HOST` environment variable support.** Lantern now resolves the
+  Docker endpoint once at startup from the standard Docker environment
+  variables rather than always dialing `/var/run/docker.sock` directly.
+  Supported URL schemes:
+
+  | Value | Effect |
+  |---|---|
+  | *(unset)* | Falls back to `/var/run/docker.sock` — existing behaviour unchanged |
+  | `unix:///path/to/docker.sock` | Explicit Unix socket at an alternative path |
+  | `tcp://host:port` or `http://host:port` | Plain HTTP to a TCP endpoint (e.g. a socket proxy) |
+  | `https://host:port` | TLS — also activated by `DOCKER_TLS_VERIFY=1` |
+
+- **`DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH` support.** When
+  `DOCKER_TLS_VERIFY=1` (or the scheme is `https://`), Lantern loads
+  `ca.pem`, `cert.pem`, and `key.pem` from `DOCKER_CERT_PATH` (or
+  `~/.docker` when unset) for mutual-TLS authentication.
+
+- **Startup log line** reports the resolved transport so it is easy to
+  confirm which path is active:
+  ```
+  docker: transport = TCP (http://socket-proxy:2375)
+  ```
+  or, for a Unix socket:
+  ```
+  docker: transport = Unix socket (/var/run/docker.sock)
+  ```
+
+- **13 new unit tests** in `docker_test.go` covering all URL schemes,
+  error paths, availability probing, and container lookup over a fake
+  TCP server — no real Docker daemon required.
+
+---
+
 ## v0.62.2 — Tabbed settings, and a credential for push scripts
 
 Lantern's own behaviour is unchanged in this release. The fix is to the shipped

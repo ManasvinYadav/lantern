@@ -19,7 +19,7 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 ![Lantern Dashboard](docs/screenshots/main-dashboard.png)
 
-## Features (v0.62.2)
+## Features (v0.62.3)
 
 - **Native Docker Discovery**: Mount the Docker socket and Lantern discovers and polls every container on the host by itself — no push script, no agent, no per-service configuration. New containers appear on the dashboard automatically; opt one out with the label `lantern.ignore=true`.
 - **Live Heartbeat Bar**: Each card shows the last 30 individual checks as a sliding bar, with a new beat animating in over the WebSocket as it arrives. Hovering a beat reports how long ago it landed, its absolute time, the check's latency, and the reported message.
@@ -76,7 +76,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.62.2
+    image: ghcr.io/manasvinyadav/lantern:v0.62.3
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -104,6 +104,66 @@ docker compose up -d
 
 Access the dashboard at `http://localhost:7654/`. Every container on the host appears
 on its own, with no further configuration.
+
+### Using a Socket Proxy (Recommended for Security)
+
+Mounting the raw Docker socket gives Lantern (and anything else that can reach
+it) unrestricted daemon access — effectively root on the host. A socket proxy
+such as [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+exposes only the read-only Docker API endpoints Lantern actually needs, and
+Lantern can connect to it over TCP using the standard `DOCKER_HOST` variable:
+
+```yaml
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Grant only what Lantern needs: container list + inspect + logs
+      CONTAINERS: 1
+      INFO: 1
+      POST: 1          # Required for container restart
+    networks:
+      - socket-proxy
+
+  lantern:
+    image: ghcr.io/manasvinyadav/lantern:v0.62.3
+    container_name: lantern
+    restart: unless-stopped
+    ports:
+      - "7654:7654"
+    volumes:
+      - lantern_data:/data
+      # No socket mount needed — Lantern connects via DOCKER_HOST instead.
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
+      - LANTERN_AUTH_TOKEN=your_secret_token
+    networks:
+      - socket-proxy
+    depends_on:
+      - socket-proxy
+
+volumes:
+  lantern_data:
+
+networks:
+  socket-proxy:
+```
+
+`DOCKER_HOST` supports the same schemes the Docker CLI does:
+
+| Value | Transport |
+|---|---|
+| *(unset)* | Default Unix socket `/var/run/docker.sock` |
+| `unix:///path/to/docker.sock` | Explicit Unix socket |
+| `tcp://host:port` or `http://host:port` | Plain TCP (e.g. socket proxy) |
+| `https://host:port` | TLS — also triggered by `DOCKER_TLS_VERIFY=1` |
+
+See the [Configuration Guide](docs/CONFIG.md#native-docker-discovery) for the
+full variable reference including `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH`.
 
 ### Not using Docker?
 

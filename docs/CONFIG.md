@@ -27,7 +27,16 @@ first time they are seen — there is nothing to configure per service.
 | `LANTERN_DOCKER_DISCOVERY` | `true` | Enables the container poller. Disabled only by the literal value `false`, so a typo leaves discovery working rather than silently off. |
 | `LANTERN_DOCKER_POLL_SECONDS` | `60` | How often to poll the Docker daemon. Floored at `10` so a mistake cannot hammer the socket. |
 
-Mount the socket to enable it:
+Lantern also reads the standard Docker environment variables to determine *how* to
+reach the daemon:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DOCKER_HOST` | *(unset — uses `/var/run/docker.sock`)* | Docker endpoint URL. Supports `unix://`, `tcp://`, `http://`, and `https://` schemes. |
+| `DOCKER_TLS_VERIFY` | `0` | Set to `1` to enable mutual TLS. Requires `DOCKER_CERT_PATH`. |
+| `DOCKER_CERT_PATH` | `~/.docker` | Directory containing `ca.pem`, `cert.pem`, and `key.pem` for TLS connections. |
+
+Mount the socket to enable it (classic path):
 
 ```yaml
 volumes:
@@ -42,6 +51,65 @@ active monitors are unaffected.
 > daemon still accepts write operations over that socket, so anything that can reach it
 > can start, stop, and create containers. Treat socket access as equivalent to root on
 > the host, and keep Lantern's admin routes authenticated.
+
+### Socket Proxy
+
+Mounting the raw Docker socket gives Lantern (and anything that can reach it)
+unrestricted daemon access — effectively root on the host. A socket proxy such
+as [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+exposes only the specific API endpoints Lantern needs. Set `DOCKER_HOST` to
+point Lantern at the proxy over TCP:
+
+```yaml
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1   # GET /containers/json, GET /containers/{id}/json
+      INFO: 1         # GET /info (health probe)
+      POST: 1         # POST /containers/{id}/restart
+    networks:
+      - socket-proxy
+
+  lantern:
+    image: ghcr.io/manasvinyadav/lantern:v0.62.3
+    container_name: lantern
+    restart: unless-stopped
+    ports:
+      - "7654:7654"
+    volumes:
+      - lantern_data:/data
+      # No socket mount — Lantern connects via DOCKER_HOST instead.
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
+      - LANTERN_AUTH_TOKEN=${LANTERN_AUTH_TOKEN:-}
+    networks:
+      - socket-proxy
+    depends_on:
+      - socket-proxy
+
+volumes:
+  lantern_data:
+
+networks:
+  socket-proxy:
+```
+
+`DOCKER_HOST` is parsed at startup and reported in the log:
+
+```
+docker: transport = TCP (http://socket-proxy:2375)
+```
+
+For a Unix socket the log reads:
+
+```
+docker: transport = Unix socket (/var/run/docker.sock)
+```
 
 ### Opting a container out
 

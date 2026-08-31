@@ -13,6 +13,10 @@ services:
       # NOTE: :ro applies to the mount point, not to the Docker API. The
       # daemon still accepts write operations over this socket, so this is
       # a convention, not a security boundary.
+      #
+      # ALTERNATIVE (recommended): use a socket proxy and set DOCKER_HOST
+      # instead of mounting the raw socket. See docs/CONFIG.md#socket-proxy
+      # for a complete docker-compose example.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Port the service listens on inside the container
@@ -44,6 +48,13 @@ services:
       # How often to poll the Docker daemon, in seconds (default: 60, floor: 10)
       - LANTERN_DOCKER_POLL_SECONDS=${LANTERN_DOCKER_POLL_SECONDS:-60}
       # Containers opt out of discovery with the label lantern.ignore=true
+      #
+      # Docker endpoint (optional). Unset = use /var/run/docker.sock.
+      # Set to a socket proxy address to avoid mounting the raw socket:
+      # - DOCKER_HOST=tcp://socket-proxy:2375
+      # For TLS connections also set:
+      # - DOCKER_TLS_VERIFY=1
+      # - DOCKER_CERT_PATH=/run/secrets/docker-certs
       # Webhook URLs for status change alerts (uncomment to enable):
       # - LANTERN_WEBHOOK_DISCORD=https://discord.com/api/webhooks/...
       # - LANTERN_WEBHOOK_TELEGRAM=https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>
