@@ -439,6 +439,68 @@ a delete, so the record survives.
 
 ---
 
+## `GET|PUT /api/branding`
+Reads or sets installation-wide branding for the header, on both the dashboard and
+the public status page. Also available anonymously at `GET /api/public/branding`,
+which is what the public status page reads. Unset fields are omitted.
+
+```json
+{ "title": "Acme Status", "logo_url": "https://acme.example/logo.svg", "accent_color": "#7c5cff" }
+```
+
+`PUT` is **admin-only** — a per-service scoped API token gets `403`, since branding
+is not scoped to any one service. Validation: `title` at most 60 characters;
+`logo_url` must be an `http`/`https` URL with a host (a `javascript:` or `data:`
+URI is rejected, because this value is written into an `<img src>`);
+`accent_color` must be a `#rgb` or `#rrggbb` hex color. Send a field as `""` to
+clear it. The accent is only a default — a visitor who has picked their own accent
+keeps it. Changes are recorded in the audit log.
+
+Custom domains are a reverse-proxy concern, not application state: point a hostname
+at Lantern and serve `/status` from it.
+
+---
+
+## `GET|PUT /api/notifications/schedule`
+Reads or sets the global quiet-hours window for notifications.
+
+```json
+{ "enabled": true, "start_minute": 1320, "end_minute": 480, "mode": "digest" }
+```
+
+Minutes are 0-1439, UTC, from midnight — so `1320`/`480` is 22:00-08:00, wrapping
+past midnight. `mode` is `mute` (alerts inside the window are dropped) or `digest`
+(alerts are queued and sent as one combined message per channel when the window
+closes). `start_minute == end_minute` or `enabled: false` means never active.
+Admin-only; scoped tokens get `403`.
+
+---
+
+## `GET /api/admin/audit-log`
+Returns admin actions, newest first. `?limit=` accepts 1-500 and defaults to 100.
+Admin-only; scoped tokens get `403`.
+
+```json
+[
+  {
+    "id": 42,
+    "actor": "admin",
+    "action": "branding_change",
+    "target": "",
+    "detail": "title=Acme Status logo_url_set=true accent=#7c5cff",
+    "success": true,
+    "ip": "127.0.0.1",
+    "timestamp": "2026-09-03T18:19:47Z"
+  }
+]
+```
+
+`actor` is `admin` for a session, Basic Auth or the admin bearer token, and
+`token:<service>` for a per-service scoped token. Entries survive the deletion of
+whatever they name — removing a service does not erase the record that it happened.
+
+---
+
 ## `GET|PUT /api/services/{name}/alerts`
 Reads or sets which webhook channels a service's alerts go to.
 

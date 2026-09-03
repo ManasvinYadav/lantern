@@ -9,6 +9,35 @@ good idea.
 
 ---
 
+## v0.66.0 — Status page branding
+
+### Added
+
+- **`GET`/`PUT /api/branding`** (plus the unauthenticated public mirror
+  `GET /api/public/branding`), and a new "Branding" section in
+  Settings → General. Overrides three things in the header, on both the
+  dashboard and the public status page:
+  - **Name** — replaces "Lantern" in the header and the browser tab title.
+  - **Logo URL** — an image shown beside the name. Restricted to `http(s)`
+    URLs server-side, so a stored value can never become a `javascript:` or
+    `data:` URI reflected into an `<img src>`.
+  - **Default accent** — a hex color applied to visitors who have not
+    picked their own accent. A personal choice always wins over the
+    operator default.
+
+  Writes are admin-only: a per-service scoped API token gets a 403, since
+  branding is installation-wide. Every change is recorded in the audit log.
+  Closes the "public status page cannot be branded" feature gap.
+
+  Custom domains stay a reverse-proxy concern rather than application
+  state — point a hostname at Lantern's `/status` and the branding follows.
+
+### Fixed
+
+- The browser tab title had a hardcoded `v0.62.2` in it, five releases
+  stale. It now reads "Lantern — Service Dashboard" (or the configured
+  name).
+
 ## v0.65.0 — Notification quiet hours (mute or digest)
 
 ### Added

@@ -24,3 +24,6 @@ Thumbs.db
 .env
 
 .agents/
+
+# Generated knowledge graph
+graphify-out/

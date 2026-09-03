@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.65.0"
+const version = "0.66.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -319,6 +319,11 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created
 		log.Fatalf("failed to apply notification schedule schema: %v", err)
 	}
 
+	// Status page branding (see branding.go).
+	if _, err := db.Exec(brandingSchema); err != nil {
+		log.Fatalf("failed to apply branding schema: %v", err)
+	}
+
 	// Additive column migrations. Each is a no-op on every boot after the
 	// first, so the expected error is "duplicate column name" — see
 	// applyMigration, which tells that apart from a real failure.
@@ -458,6 +463,10 @@ func isProtectedEndpoint(r *http.Request) bool {
 	// notifications. Reading it is harmless; changing it is administrative.
 	case path == "/api/notifications/schedule" && method != http.MethodGet:
 		return true
+	// Global status-page branding (name/logo/accent color). Reading it is
+	// the whole point — it is shown to every visitor; changing it isn't.
+	case path == "/api/branding" && method != http.MethodGet:
+		return true
 	case strings.HasSuffix(path, "/monitor") && method != http.MethodGet:
 		return true
 	case strings.HasSuffix(path, "/check") && method == http.MethodPost:
@@ -501,6 +510,10 @@ func isAdminOnlyEndpoint(r *http.Request) bool {
 	// to one service has no legitimate reason to change when every
 	// service's notifications go quiet.
 	case path == "/api/notifications/schedule":
+		return true
+	// Global branding, same reasoning: one service's token has no business
+	// renaming or re-logoing the entire installation.
+	case path == "/api/branding":
 		return true
 	}
 	return false
@@ -2579,6 +2592,8 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/services/{name}/alerts", handlePutServiceAlerts(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/config/export", handleConfigExport(db)).Methods(http.MethodGet)
 	api.Handle("/config/import", handleConfigImport(db, scheduler)).Methods(http.MethodPost)
+	api.Handle("/branding", handleGetBranding(db)).Methods(http.MethodGet)
+	api.Handle("/branding", handlePutBranding(db)).Methods(http.MethodPut)
 
 	publicApi := r.PathPrefix("/api/public").Subrouter()
 	publicApi.Use(jsonMiddleware)
@@ -2587,6 +2602,9 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	publicApi.Handle("/services/{name}/uptime", handleGetUptime(db)).Methods(http.MethodGet)
 	// An outage notice is most useful exactly where anyone can read it.
 	publicApi.Handle("/banner", handleGetBanner(db)).Methods(http.MethodGet)
+	// Same reasoning as the banner: branding exists specifically to be seen
+	// by every visitor of the public status page.
+	publicApi.Handle("/branding", handleGetBranding(db)).Methods(http.MethodGet)
 	// /services/{name}/metadata is deliberately absent. It returns the
 	// container image, its IP, its published ports and its host mount paths —
 	// the same class of container internals isProtectedEndpoint gates

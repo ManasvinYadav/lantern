@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Lantern" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="manifest" href="/manifest.json" />
-  <title>🔆 Lantern v0.62.2 — Service Dashboard</title>
+  <title>🔆 Lantern — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -1863,7 +1863,8 @@
       <div class="header-left">
         <div class="header-title">
           <div class="loading-pulse" id="loadingIndicator"></div>
-          Lantern
+          <img id="brandLogo" src="" alt="" style="display:none; height:22px; width:auto; border-radius:4px; vertical-align:middle;">
+          <span id="brandTitle">Lantern</span>
         </div>
         <div class="header-subtitle">Service Status & Diagnostics</div>
       </div>
@@ -2169,6 +2170,41 @@
             </div>
           </div>
 
+          <!-- Branding Section ---------------------------------------------
+               Global overrides for the name, logo and accent shown in the
+               header of both this dashboard and the public status page. -->
+          <div id="brandingSection">
+            <div class="section-label">Branding</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              Renames and re-logos the header on this dashboard and the public status page. Leave a field blank to keep Lantern's default. Custom domains are handled by your reverse proxy, not here.
+            </div>
+
+            <form id="brandingForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label" for="brandingTitle">Name <span class="field-optional">optional</span></label>
+                <input type="text" class="form-input" id="brandingTitle" maxlength="60"
+                       placeholder="Lantern" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="brandingLogoUrl">Logo URL <span class="field-optional">optional</span></label>
+                <input type="url" class="form-input" id="brandingLogoUrl" maxlength="2048"
+                       placeholder="https://example.com/logo.svg" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="brandingAccent">Default accent <span class="field-optional">optional</span></label>
+                <input type="text" class="form-input" id="brandingAccent" maxlength="7"
+                       placeholder="#10b981" pattern="#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}" autocomplete="off" />
+                <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+                  Hex color. Only a default &mdash; anyone who has picked their own accent above keeps it.
+                </div>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <span id="brandingStatus" style="font-size:11px; color:var(--text-muted);"></span>
+                <button type="submit" class="btn primary" id="brandingSave">Save branding</button>
+              </div>
+            </form>
+          </div>
+
           <!-- Announcement Section ----------------------------------------
                Publishing writes through /api/banner, which is gated; reading is
                not, which is the whole point — the notice has to be visible on
@@ -2466,6 +2502,11 @@
       dockerLogs: (name, tail = 100) => `/api/services/${encodeURIComponent(name)}/docker/logs?tail=${tail}`,
       ws: isPublic ? '/api/public/ws' : '/ws',
       banner: isPublic ? '/api/public/banner' : '/api/banner',
+      // Reads always use the public mirror: same payload, never gated, so a
+      // scoped-token dashboard doesn't 403 on its own header. Only the PUT
+      // needs the admin route.
+      branding: '/api/public/branding',
+      brandingAdmin: '/api/branding',
       webhookDeliveries: '/api/webhooks/deliveries',
       monitors: '/api/monitors',
       serviceMonitor: (name) => `/api/services/${encodeURIComponent(name)}/monitor`,
@@ -3863,6 +3904,7 @@
 
       bindEvents();
       tagCredentialFields();
+      loadBranding();
 
       // /status is public by construction and never asks for a session.
       if (isPublic) {
@@ -4025,6 +4067,8 @@
 
       const announcementForm = document.getElementById('announcementForm');
       if (announcementForm) announcementForm.addEventListener('submit', submitAnnouncement);
+      const brandingForm = document.getElementById('brandingForm');
+      if (brandingForm) brandingForm.addEventListener('submit', (e) => { e.preventDefault(); saveBranding(); });
       const bannerTakeDown = document.getElementById('bannerTakeDown');
       if (bannerTakeDown) bannerTakeDown.addEventListener('click', takeDownAnnouncement);
 
@@ -4584,6 +4628,18 @@
       return hexLuminance(color) > 0.18 ? '#0b1220' : '#ffffff';
     }
 
+    // Paint the accent custom properties. Split out of setAccentColor because
+    // branding applies an operator-wide accent without touching the visitor's
+    // own stored preference — see loadBranding.
+    function applyAccentVars(color) {
+      document.documentElement.style.setProperty('--accent', color);
+      document.documentElement.style.setProperty('--accent-glow', color + '40');
+      document.documentElement.style.setProperty('--accent-bg', color + '20');
+      // 0.35 alpha for the focus ring, a touch stronger than the glow.
+      document.documentElement.style.setProperty('--accent-ring', color + '59');
+      document.documentElement.style.setProperty('--on-accent', onAccentFor(color));
+    }
+
     function setAccentColor(color) {
       const hexDisp = document.getElementById('accentHexDisplay');
       const picker = document.getElementById('accentPicker');
@@ -4607,12 +4663,7 @@
         if (hexDisp) hexDisp.innerText = 'Default';
         if (picker) picker.value = '#10b981';
       } else {
-        document.documentElement.style.setProperty('--accent', color);
-        document.documentElement.style.setProperty('--accent-glow', color + '40');
-        document.documentElement.style.setProperty('--accent-bg', color + '20');
-        // 0.35 alpha for the focus ring, a touch stronger than the glow.
-        document.documentElement.style.setProperty('--accent-ring', color + '59');
-        document.documentElement.style.setProperty('--on-accent', onAccentFor(color));
+        applyAccentVars(color);
         localStorage.setItem('lantern_accent', color);
         if (hexDisp) hexDisp.innerText = color;
         if (picker) picker.value = color;
@@ -4662,6 +4713,7 @@
       loadWebhookDeliveries();
       loadActiveMonitors();
       loadQuietHours();
+      loadBranding();
       refreshAnnouncementState();
     }
 
@@ -4680,6 +4732,80 @@
       const h = parseInt(parts[0], 10) || 0;
       const m = parseInt(parts[1], 10) || 0;
       return h * 60 + m;
+    }
+
+    // ---- Status page branding --------------------------------------------
+    // Operator-wide overrides for the product name, logo and accent, applied
+    // to both the dashboard and the public status page (one HTML page serves
+    // both). Read from the public mirror so it works before sign-in.
+    async function loadBranding() {
+      let b;
+      try {
+        const res = await fetch(API.branding);
+        if (!res.ok) return;
+        b = await res.json();
+      } catch (err) {
+        console.error('Error loading branding:', err);
+        return;
+      }
+      applyBranding(b);
+
+      // Populate the settings form when it exists (admin dashboard only).
+      const t = document.getElementById('brandingTitle');
+      if (t) t.value = b.title || '';
+      const l = document.getElementById('brandingLogoUrl');
+      if (l) l.value = b.logo_url || '';
+      const a = document.getElementById('brandingAccent');
+      if (a) a.value = b.accent_color || '';
+    }
+
+    function applyBranding(b) {
+      const title = (b.title || '').trim();
+      const titleEl = document.getElementById('brandTitle');
+      if (titleEl) titleEl.textContent = title || 'Lantern';
+      document.title = '\u{1F506} ' + (title || 'Lantern') + ' \u2014 Service Dashboard';
+
+      const logoEl = document.getElementById('brandLogo');
+      if (logoEl) {
+        // The server only ever stores an http(s) URL (see handlePutBranding),
+        // but re-check here: this value goes straight into an <img src>.
+        const ok = /^https?:\/\//i.test(b.logo_url || '');
+        logoEl.src = ok ? b.logo_url : '';
+        logoEl.alt = ok ? (title || 'Lantern') + ' logo' : '';
+        logoEl.style.display = ok ? '' : 'none';
+      }
+
+      // Only as a default: a visitor who picked their own accent keeps it.
+      if (b.accent_color && !localStorage.getItem('lantern_accent')) {
+        applyAccentVars(b.accent_color);
+      }
+    }
+
+    async function saveBranding() {
+      const statusEl = document.getElementById('brandingStatus');
+      const payload = {
+        title: document.getElementById('brandingTitle').value.trim(),
+        logo_url: document.getElementById('brandingLogoUrl').value.trim(),
+        accent_color: document.getElementById('brandingAccent').value.trim(),
+      };
+      try {
+        const res = await authFetch(API.brandingAdmin, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'save failed');
+        }
+        applyBranding(await res.json());
+        if (statusEl) statusEl.textContent = 'Saved.';
+        showToast('Branding saved', 'success');
+      } catch (err) {
+        console.error('Error saving branding:', err);
+        if (statusEl) statusEl.textContent = 'Failed to save: ' + err.message;
+        showToast('Failed to save branding', 'error');
+      }
     }
 
     async function loadQuietHours() {
