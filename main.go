@@ -2567,6 +2567,14 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/notifications/schedule", handlePutNotificationSchedule(db)).Methods(http.MethodPut)
 	api.Handle("/activity", handleGetActivity(db)).Methods(http.MethodGet)
 	api.Handle("/admin/audit-log", handleGetAuditLog(db)).Methods(http.MethodGet)
+
+	// User management. Owner-only, enforced in authMiddleware via
+	// isOwnerOnlyEndpoint; the /api/admin/ prefix already keeps scoped
+	// service tokens off it.
+	api.Handle("/admin/users", handleGetUsers(db)).Methods(http.MethodGet)
+	api.Handle("/admin/users", handlePostUser(db)).Methods(http.MethodPost)
+	api.Handle("/admin/users/{username}", handlePutUser(db)).Methods(http.MethodPut)
+	api.Handle("/admin/users/{username}", handleDeleteUser(db)).Methods(http.MethodDelete)
 	api.Handle("/backup", handleBackup(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 

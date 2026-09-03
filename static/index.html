@@ -2145,6 +2145,8 @@
           <button type="button" role="tab" data-settings-tab="account" class="settings-tab" id="settingsTab-account" aria-controls="settingsPanel-account" aria-selected="false" tabindex="-1">Account &amp; Security</button>
           <button type="button" role="tab" data-settings-tab="alerts" class="settings-tab" id="settingsTab-alerts" aria-controls="settingsPanel-alerts" aria-selected="false" tabindex="-1">Alerts &amp; Webhooks</button>
           <button type="button" role="tab" data-settings-tab="monitors" class="settings-tab" id="settingsTab-monitors" aria-controls="settingsPanel-monitors" aria-selected="false" tabindex="-1">Monitors</button>
+          <!-- Owner-only; openSettings hides this for every other role. -->
+          <button type="button" role="tab" data-settings-tab="users" class="settings-tab" id="settingsTab-users" aria-controls="settingsPanel-users" aria-selected="false" tabindex="-1" hidden>Users</button>
         </div>
       </div>
       <div class="drawer-body">
@@ -2408,6 +2410,46 @@
             </div>
           </div>
         </div>
+
+        <div class="settings-panel" id="settingsPanel-users" data-settings-panel="users" role="tabpanel" aria-labelledby="settingsTab-users">
+          <div>
+            <div class="section-label">Accounts</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+              <strong>Owner</strong> runs the install and manages accounts.
+              <strong>Admin</strong> can do everything except manage accounts.
+              <strong>Viewer</strong> can only look &mdash; no changes, and no access to backups, webhook URLs, config export or the audit log.
+            </div>
+            <div id="usersList" style="font-size:12px; margin-top:14px; display:flex; flex-direction:column; gap:6px;">
+              <span style="color:var(--text-muted);">Loading&hellip;</span>
+            </div>
+          </div>
+
+          <div style="padding-top:16px; border-top:1px solid var(--border);">
+            <div class="section-label">Add an account</div>
+            <form id="userCreateForm" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+              <div class="form-group">
+                <label class="form-label" for="newUserName">Username</label>
+                <input type="text" class="form-input" id="newUserName" maxlength="64" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="newUserPassword">Password</label>
+                <input type="password" class="form-input" id="newUserPassword" autocomplete="new-password" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="newUserRole">Role</label>
+                <select class="form-input" id="newUserRole">
+                  <option value="viewer">Viewer &mdash; read-only</option>
+                  <option value="admin" selected>Admin &mdash; everything but accounts</option>
+                  <option value="owner">Owner &mdash; everything</option>
+                </select>
+              </div>
+              <div class="login-error" id="userCreateError" hidden role="alert"></div>
+              <div style="display:flex; justify-content:flex-end;">
+                <button type="submit" class="btn primary" id="userCreateSubmit">Create account</button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -2523,6 +2565,8 @@
       deleteService: (name) => `/api/services/${encodeURIComponent(name)}`,
       badge: (name) => `/api/badge/${encodeURIComponent(name)}.svg`,
       activity: '/api/activity',
+      users: '/api/admin/users',
+      user: (name) => `/api/admin/users/${encodeURIComponent(name)}`,
       auditLog: '/api/admin/audit-log',
       notificationSchedule: '/api/notifications/schedule',
       exportHistory: (name, format) => `/api/services/${encodeURIComponent(name)}/export?format=${format}`,
@@ -3607,7 +3651,7 @@
 
     // The shell is always served; the data behind it is what the server gates.
     // So the first thing the page does is ask which mode it is in.
-    const authState = { required: false, authenticated: false, username: '', tokenMode: false, canSetup: true };
+    const authState = { required: false, authenticated: false, username: '', role: '', tokenMode: false, canSetup: true };
     let dashboardStarted = false;
 
     async function fetchSession() {
@@ -3618,6 +3662,7 @@
         authState.required = !!j.auth_required;
         authState.authenticated = !!j.authenticated;
         authState.username = j.username || '';
+        authState.role = j.role || '';
         authState.tokenMode = !!j.token_mode;
         authState.canSetup = !!j.can_setup;
       } catch (e) {
@@ -4078,6 +4123,24 @@
       if (announcementForm) announcementForm.addEventListener('submit', submitAnnouncement);
       const brandingForm = document.getElementById('brandingForm');
       if (brandingForm) brandingForm.addEventListener('submit', (e) => { e.preventDefault(); saveBranding(); });
+
+      const userCreateForm = document.getElementById('userCreateForm');
+      if (userCreateForm) userCreateForm.addEventListener('submit', createUser);
+
+      // Delegated: the list is re-rendered on every change.
+      const usersList = document.getElementById('usersList');
+      if (usersList) {
+        usersList.addEventListener('change', (e) => {
+          const sel = e.target.closest('[data-user-role]');
+          if (sel) updateUser(sel.dataset.userRole, { role: sel.value });
+        });
+        usersList.addEventListener('click', (e) => {
+          const del = e.target.closest('[data-user-delete]');
+          if (del) { deleteUser(del.dataset.userDelete); return; }
+          const tog = e.target.closest('[data-user-toggle]');
+          if (tog) updateUser(tog.dataset.userToggle, { disabled: tog.dataset.disabled !== '1' });
+        });
+      }
       const bannerTakeDown = document.getElementById('bannerTakeDown');
       if (bannerTakeDown) bannerTakeDown.addEventListener('click', takeDownAnnouncement);
 
@@ -4724,6 +4787,13 @@
       loadQuietHours();
       loadBranding();
       refreshAnnouncementState();
+
+      // Accounts exist only under the login gate, and only an owner may see
+      // or change them. In token mode there are no accounts at all.
+      const isOwner = authState.required && authState.role === 'owner';
+      const usersTab = document.getElementById('settingsTab-users');
+      if (usersTab) usersTab.hidden = !isOwner;
+      if (isOwner) loadUsers();
     }
 
     // minutesToTimeInput / timeInputToMinutes convert between the API's
@@ -4741,6 +4811,110 @@
       const h = parseInt(parts[0], 10) || 0;
       const m = parseInt(parts[1], 10) || 0;
       return h * 60 + m;
+    }
+
+    // ---- Accounts --------------------------------------------------------
+    // Owner-only. The tab is hidden for other roles as a courtesy; the gate is
+    // roleAllows in authMiddleware, which refuses these routes outright.
+    const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', viewer: 'Viewer' };
+
+    async function loadUsers() {
+      const list = document.getElementById('usersList');
+      if (!list) return;
+      try {
+        const res = await authFetch(API.users);
+        if (!res.ok) throw new Error('failed to load');
+        renderUsers(await res.json());
+      } catch (err) {
+        console.error('Error loading users:', err);
+        list.innerHTML = '<span style="color:var(--text-muted);">Could not load accounts.</span>';
+      }
+    }
+
+    function renderUsers(users) {
+      const list = document.getElementById('usersList');
+      if (!list) return;
+      if (!users.length) {
+        list.innerHTML = '<span style="color:var(--text-muted);">No accounts yet.</span>';
+        return;
+      }
+      const owners = users.filter(u => u.role === 'owner' && !u.disabled).length;
+      list.innerHTML = users.map(u => {
+        const self = u.username.toLowerCase() === (authState.username || '').toLowerCase();
+        // The server refuses to strand an install without an owner, or to let
+        // you delete the account you are signed in as. Mirror both here so the
+        // control is not offered and then rejected.
+        const lastOwner = u.role === 'owner' && !u.disabled && owners < 2;
+        const locked = lastOwner ? ' disabled title="The last owner cannot be changed"' : '';
+        return `<div style="display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm);">
+          <span style="flex:1; font-weight:500; ${u.disabled ? 'opacity:.55; text-decoration:line-through;' : ''}">${escapeHtml(u.username)}${self ? ' <span style="color:var(--text-muted); font-weight:400;">(you)</span>' : ''}</span>
+          <select class="form-input" data-user-role="${escapeHtml(u.username)}" style="width:auto; padding:3px 6px; font-size:11px;"${locked}>
+            ${['viewer','admin','owner'].map(r => `<option value="${r}"${r === u.role ? ' selected' : ''}>${ROLE_LABELS[r]}</option>`).join('')}
+          </select>
+          <button type="button" class="btn" data-user-toggle="${escapeHtml(u.username)}" data-disabled="${u.disabled ? '1' : '0'}" style="padding:3px 8px; font-size:11px;"${locked}>${u.disabled ? 'Enable' : 'Disable'}</button>
+          <button type="button" class="btn" data-user-delete="${escapeHtml(u.username)}" style="padding:3px 8px; font-size:11px;"${lastOwner || self ? ' disabled' : ''}>Remove</button>
+        </div>`;
+      }).join('');
+    }
+
+    async function updateUser(username, patch) {
+      try {
+        const res = await authFetch(API.user(username), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'update failed');
+        }
+        showToast('Account updated', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+      loadUsers();
+    }
+
+    async function deleteUser(username) {
+      if (!confirm(`Remove the account "${username}"? Their sessions end immediately.`)) return;
+      try {
+        const res = await authFetch(API.user(username), { method: 'DELETE' });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'delete failed');
+        }
+        showToast('Account removed', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+      loadUsers();
+    }
+
+    async function createUser(e) {
+      e.preventDefault();
+      const errEl = document.getElementById('userCreateError');
+      if (errEl) errEl.hidden = true;
+      const payload = {
+        username: document.getElementById('newUserName').value.trim(),
+        password: document.getElementById('newUserPassword').value,
+        role: document.getElementById('newUserRole').value,
+      };
+      try {
+        const res = await authFetch(API.users, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'could not create the account');
+        }
+        document.getElementById('userCreateForm').reset();
+        showToast('Account created', 'success');
+        loadUsers();
+      } catch (err) {
+        if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
+      }
     }
 
     // ---- Status page branding --------------------------------------------
@@ -6138,8 +6312,10 @@
 
     // Arrow-key navigation for the tab bar, per the ARIA tabs pattern.
     function moveSettingsTabFocus(current, delta) {
+      // Hidden tabs are skipped: the Users tab is only present for an owner,
+      // and arrowing onto it would switch to a panel that is not there.
       const tabs = Array.from(
-        document.querySelectorAll('#settingsTabs [data-settings-tab]'));
+        document.querySelectorAll('#settingsTabs [data-settings-tab]')).filter(t => !t.hidden);
       if (!tabs.length) return;
       let i;
       if (delta === 'first') i = 0;

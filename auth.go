@@ -71,6 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 // need to know who is acting — the credential change endpoint in particular.
 const sessionUserKey contextKey = "session_user"
 
+// sessionRoleKey carries the caller's role, for the handful of handlers that
+// need it after the middleware's own gate has already passed.
+const sessionRoleKey contextKey = "session_role"
+
 // credentialsPresent mirrors "admin_credentials has a row" so the middleware
 // doesn't hit SQLite on every request just to learn whether to gate. It is
 // refreshed at boot and after any credential write.
@@ -82,7 +86,7 @@ func authRequired() bool { return credentialsPresent.Load() }
 // refreshCredentialState re-reads whether an admin row exists.
 func refreshCredentialState(db *sql.DB) {
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM admin_credentials WHERE id = 1`).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE disabled = 0`).Scan(&n); err != nil {
 		log.Printf("auth: could not read credential state: %v", err)
 		return
 	}
@@ -95,6 +99,11 @@ func initAuth(db *sql.DB, cfg *Config) {
 	if _, err := db.Exec(authSchema); err != nil {
 		log.Fatalf("failed to apply auth schema: %v", err)
 	}
+	if _, err := db.Exec(usersSchema); err != nil {
+		log.Fatalf("failed to apply users schema: %v", err)
+	}
+	// Carry a pre-v0.70 single operator into `users` before anything reads it.
+	migrateLegacyCredentials(db)
 	purgeExpiredSessions(db)
 
 	// Bootstrap: LANTERN_AUTH_USER/PASS seed the store the first time only.
@@ -102,11 +111,11 @@ func initAuth(db *sql.DB, cfg *Config) {
 	// the UI is not silently reverted by a stale env var on the next restart.
 	if cfg.AuthUser != "" && cfg.AuthPass != "" {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM admin_credentials WHERE id = 1`).Scan(&n); err == nil && n == 0 {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err == nil && n == 0 {
 			if err := writeCredentials(db, cfg.AuthUser, cfg.AuthPass); err != nil {
 				log.Printf("auth: failed to seed credentials from environment: %v", err)
 			} else {
-				log.Printf("auth: seeded admin credentials for %q from LANTERN_AUTH_USER", cfg.AuthUser)
+				log.Printf("auth: seeded owner account %q from LANTERN_AUTH_USER", cfg.AuthUser)
 			}
 		}
 	}
@@ -116,43 +125,59 @@ func initAuth(db *sql.DB, cfg *Config) {
 	}
 }
 
-// writeCredentials hashes pass and upserts the single admin row.
+// writeCredentials hashes pass and upserts an account. Pre-v0.70 this wrote
+// the admin_credentials singleton; it now writes `users`, keeping the caller's
+// role if the account already exists and making a brand-new one the owner —
+// the only caller that creates rather than updates is first-time setup.
 func writeCredentials(db *sql.DB, user, pass string) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(pass), bcryptCost)
 	if err != nil {
 		return err
 	}
+	now := time.Now().Unix()
 	_, err = db.Exec(`
-INSERT INTO admin_credentials (id, username, password_hash, updated_at)
-VALUES (1, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET username = excluded.username,
-                              password_hash = excluded.password_hash,
-                              updated_at = excluded.updated_at`,
-		user, string(hash), time.Now().Unix())
+INSERT INTO users (username, password_hash, role, disabled, created_at, updated_at)
+VALUES (?, ?, ?, 0, ?, ?)
+ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash,
+                                    updated_at = excluded.updated_at`,
+		user, string(hash), roleOwner, now, now)
 	return err
 }
 
-// loadCredentials returns the stored username and hash.
-func loadCredentials(db *sql.DB) (user, hash string, ok bool) {
-	err := db.QueryRow(`SELECT username, password_hash FROM admin_credentials WHERE id = 1`).Scan(&user, &hash)
+// renameUser changes an account's username, carrying its sessions with it so
+// the caller who just renamed themselves is not signed out mid-request.
+func renameUser(db *sql.DB, from, to string) error {
+	tx, err := db.Begin()
 	if err != nil {
-		return "", "", false
+		return err
 	}
-	return user, hash, true
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE users SET username = ?, updated_at = ? WHERE username = ? COLLATE NOCASE`,
+		to, time.Now().Unix(), from); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE sessions SET username = ? WHERE username = ? COLLATE NOCASE`, to, from); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // verifyCredentials checks a username/password pair against the store. The
 // username is compared in constant time and the password always runs through
 // bcrypt, so a wrong username costs the same as a wrong password and the
 // response time leaks neither.
-func verifyCredentials(db *sql.DB, user, pass string) bool {
-	storedUser, storedHash, ok := loadCredentials(db)
-	if !ok {
-		return false
+func verifyCredentials(db *sql.DB, user, pass string) (string, bool) {
+	hash, role, found := lookupUserAuth(db, user)
+	if !found {
+		// Still pay for a bcrypt compare on an unknown or disabled account,
+		// so response time does not tell an attacker which usernames exist.
+		_ = bcrypt.CompareHashAndPassword([]byte(bcryptDummyHash), []byte(pass))
+		return "", false
 	}
-	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(storedUser)) == 1
-	passOK := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(pass)) == nil
-	return userOK && passOK
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(pass)) != nil {
+		return "", false
+	}
+	return role, true
 }
 
 // ---------------------------------------------------------------------------
@@ -185,33 +210,35 @@ func createSession(db *sql.DB, username string) (string, time.Time, error) {
 }
 
 // sessionUser resolves a request's session cookie to a username.
-func sessionUser(db *sql.DB, r *http.Request) (string, bool) {
+// sessionUser resolves the session cookie to a username and role. The role is
+// joined live from `users` rather than stamped onto the session, so demoting
+// or disabling an account takes effect on that account's very next request
+// instead of whenever it next signs in. A row that no longer joins — deleted
+// or disabled — is no session at all.
+func sessionUser(db *sql.DB, r *http.Request) (string, string, bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil || c.Value == "" {
-		return "", false
+		return "", "", false
 	}
-	var username string
+	var username, role string
 	var expires int64
-	err = db.QueryRow(`SELECT username, expires_at FROM sessions WHERE token_hash = ?`,
-		hashSessionToken(c.Value)).Scan(&username, &expires)
+	err = db.QueryRow(`
+SELECT s.username, u.role, s.expires_at
+FROM sessions s JOIN users u ON u.username = s.username COLLATE NOCASE
+WHERE s.token_hash = ? AND u.disabled = 0`,
+		hashSessionToken(c.Value)).Scan(&username, &role, &expires)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	if time.Now().Unix() > expires {
 		_, _ = db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hashSessionToken(c.Value))
-		return "", false
+		return "", "", false
 	}
-	return username, true
+	return username, role, true
 }
 
 func revokeSession(db *sql.DB, raw string) {
 	_, _ = db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hashSessionToken(raw))
-}
-
-// revokeAllSessions logs out every device. Called whenever credentials change.
-func revokeAllSessions(db *sql.DB) error {
-	_, err := db.Exec(`DELETE FROM sessions`)
-	return err
 }
 
 func purgeExpiredSessions(db *sql.DB) {
@@ -439,9 +466,14 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 
 		// 1. Session cookie. Also the only credential a browser can attach to
 		//    a WebSocket handshake, which is what makes /ws work under auth.
-		if user, ok := sessionUser(db, r); ok {
+		if user, role, ok := sessionUser(db, r); ok {
+			if !roleAllows(role, r) {
+				writeError(w, http.StatusForbidden, "Your role does not permit this action.")
+				return
+			}
 			ctx := context.WithValue(r.Context(), isAdminKey, true)
 			ctx = context.WithValue(ctx, sessionUserKey, user)
+			ctx = context.WithValue(ctx, sessionRoleKey, role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -453,7 +485,15 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 
 			if cfg.AuthToken != "" &&
 				subtle.ConstantTimeCompare([]byte(token), []byte(cfg.AuthToken)) == 1 {
+				// Deliberately admin, not owner: a static credential sitting
+				// in an env var should be able to run the installation but
+				// not mint accounts on it.
+				if !roleAllows(roleAdmin, r) {
+					writeError(w, http.StatusForbidden, "The admin API token cannot manage users.")
+					return
+				}
 				ctx := context.WithValue(r.Context(), isAdminKey, true)
+				ctx = context.WithValue(ctx, sessionRoleKey, roleAdmin)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -480,15 +520,25 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 		//    against the env pair otherwise, so curl -u keeps working.
 		if user, pass, ok := r.BasicAuth(); ok {
 			valid := false
+			role := roleOwner // the env pair predates roles and ran everything
 			if authRequired() {
-				valid = verifyCredentials(db, user, pass)
+				var r2 string
+				r2, valid = verifyCredentials(db, user, pass)
+				if valid {
+					role = r2
+				}
 			} else if cfg.AuthEnabled {
 				valid = subtle.ConstantTimeCompare([]byte(user), []byte(cfg.AuthUser)) == 1 &&
 					subtle.ConstantTimeCompare([]byte(pass), []byte(cfg.AuthPass)) == 1
 			}
 			if valid {
+				if !roleAllows(role, r) {
+					writeError(w, http.StatusForbidden, "Your role does not permit this action.")
+					return
+				}
 				ctx := context.WithValue(r.Context(), isAdminKey, true)
 				ctx = context.WithValue(ctx, sessionUserKey, user)
+				ctx = context.WithValue(ctx, sessionRoleKey, role)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -522,6 +572,10 @@ type authSessionResponse struct {
 	AuthRequired  bool   `json:"auth_required"`
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
+	// Role is what the dashboard uses to hide controls the caller may not
+	// use. It is a convenience, never the gate — that is roleAllows, applied
+	// in authMiddleware before any handler runs.
+	Role string `json:"role,omitempty"`
 	// TokenMode reports the legacy LANTERN_AUTH_TOKEN setup, where there is no
 	// username/password to type and the dashboard must not show a login wall.
 	TokenMode bool `json:"token_mode"`
@@ -540,9 +594,10 @@ func handleGetAuthSession(db *sql.DB, cfg *Config) http.HandlerFunc {
 			TokenMode:    !authRequired() && cfg.AuthToken != "",
 			CanSetup:     !authRequired(),
 		}
-		if user, ok := sessionUser(db, r); ok {
+		if user, role, ok := sessionUser(db, r); ok {
 			resp.Authenticated = true
 			resp.Username = user
+			resp.Role = role
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -571,7 +626,7 @@ func handlePostLogin(db *sql.DB, throttle *loginThrottle) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "Malformed request body.")
 			return
 		}
-		if !verifyCredentials(db, req.Username, req.Password) {
+		if _, ok := verifyCredentials(db, req.Username, req.Password); !ok {
 			throttle.fail(r)
 			recordAuditAs(db, req.Username, throttleKey(r), "login", "", false, "invalid credentials")
 			writeError(w, http.StatusUnauthorized, "Invalid credentials")
@@ -643,14 +698,25 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 				return
 			}
 		}
-		currentUser, _, _ := loadCredentials(db)
+		// Pre-v0.70 this changed "the" admin, because there was only one. It
+		// now changes whoever is signed in — which means it needs a session,
+		// not merely a credential. A caller holding only the admin API token
+		// has no account to change; managing accounts is /api/admin/users,
+		// and letting a machine credential rewrite a human's password is the
+		// privilege escalation that route deliberately blocks.
+		currentUser, _ := r.Context().Value(sessionUserKey).(string)
 
 		if !setup {
+			if currentUser == "" {
+				writeError(w, http.StatusBadRequest,
+					"Sign in to change your own credentials, or manage the account from Settings \u2192 Users.")
+				return
+			}
 			if req.CurrentPassword == "" {
 				writeError(w, http.StatusBadRequest, "Current password is required.")
 				return
 			}
-			if !verifyCredentials(db, currentUser, req.CurrentPassword) {
+			if _, ok := verifyCredentials(db, currentUser, req.CurrentPassword); !ok {
 				recordAuditAs(db, currentUser, throttleKey(r), "credentials_change", "", false, "current password did not verify")
 				writeError(w, http.StatusUnauthorized, "Current password is incorrect")
 				return
@@ -674,17 +740,27 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 			}
 		}
 		if newPass == "" {
-			// Username-only change: the existing hash is left untouched.
-			if _, err := db.Exec(`UPDATE admin_credentials SET username = ?, updated_at = ? WHERE id = 1`,
-				newUser, time.Now().Unix()); err != nil {
+			// Username-only change: the existing hash is left untouched, and
+			// the account's sessions move with it.
+			if err := renameUser(db, currentUser, newUser); err != nil {
+				log.Printf("auth: rename failed: %v", err)
 				writeError(w, http.StatusInternalServerError, "Could not update credentials.")
 				return
 			}
-			recordAudit(db, r, "credentials_change", "", true, "username changed")
+			recordAudit(db, r, "credentials_change", newUser, true, "username changed")
 		} else {
 			if len(newPass) < 8 {
 				writeError(w, http.StatusBadRequest, "New password must be at least 8 characters.")
 				return
+			}
+			if currentUser != "" && !strings.EqualFold(currentUser, newUser) {
+				// Rename first: otherwise writeCredentials would insert a
+				// second account under the new name and leave the old one.
+				if err := renameUser(db, currentUser, newUser); err != nil {
+					log.Printf("auth: rename failed: %v", err)
+					writeError(w, http.StatusInternalServerError, "Could not update credentials.")
+					return
+				}
 			}
 			if err := writeCredentials(db, newUser, newPass); err != nil {
 				log.Printf("auth: credential update failed: %v", err)
@@ -698,12 +774,11 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 			recordAudit(db, r, "credentials_change", "", true, detail)
 		}
 
-		// Rotate: every existing session dies, including this caller's, then
-		// the caller is handed a fresh one so the tab they are using stays
-		// logged in. Any other device has to sign in again.
-		if err := revokeAllSessions(db); err != nil {
-			log.Printf("auth: could not revoke sessions: %v", err)
-		}
+		// Rotate this account's sessions, including this caller's, then hand
+		// the caller a fresh one so the tab they are using stays logged in.
+		// Their other devices have to sign in again. Other people's sessions
+		// are untouched — they were never affected by this change.
+		revokeUserSessions(db, newUser)
 		refreshCredentialState(db)
 
 		raw, exp, err := createSession(db, newUser)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -87,9 +88,9 @@ func TestCredentialsSeedFromEnvOnFirstBootOnly(t *testing.T) {
 	if !authRequired() {
 		t.Fatal("authRequired() = false after seeding from env")
 	}
-	user, hash, ok := loadCredentials(db)
-	if !ok || user != "admin" {
-		t.Fatalf("loadCredentials = (%q, ok=%v), want admin", user, ok)
+	var user, hash string
+	if err := db.QueryRow(`SELECT username, password_hash FROM users`).Scan(&user, &hash); err != nil || user != "admin" {
+		t.Fatalf("seeded user = (%q, err=%v), want admin", user, err)
 	}
 	if strings.Contains(hash, "hunter2") {
 		t.Error("stored hash contains the plaintext password")
@@ -110,10 +111,10 @@ func TestCredentialsSeedFromEnvOnFirstBootOnly(t *testing.T) {
 
 	db2 := initDB(cfg)
 	t.Cleanup(func() { _ = db2.Close() })
-	if !verifyCredentials(db2, "admin", "a-different-password") {
+	if !credOK(db2, "admin", "a-different-password") {
 		t.Error("reboot reverted the stored password to the env value")
 	}
-	if verifyCredentials(db2, "admin", "hunter2hunter2") {
+	if credOK(db2, "admin", "hunter2hunter2") {
 		t.Error("stale env password still authenticates after a restart")
 	}
 }
@@ -131,7 +132,7 @@ func TestVerifyCredentialsRejectsWrongUserAndPassword(t *testing.T) {
 		{"empty", "", "", false},
 	}
 	for _, c := range cases {
-		if got := verifyCredentials(db, c.user, c.pass); got != c.want {
+		if got := credOK(db, c.user, c.pass); got != c.want {
 			t.Errorf("%s: verifyCredentials(%q, %q) = %v, want %v", c.name, c.user, c.pass, got, c.want)
 		}
 	}
@@ -285,7 +286,7 @@ func TestExpiredSessionIsRejectedAndPurged(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/services", nil)
 	req.AddCookie(cookie)
-	if _, ok := sessionUser(db, req); ok {
+	if _, _, ok := sessionUser(db, req); ok {
 		t.Error("an expired session still authenticates")
 	}
 	var n int
@@ -353,6 +354,13 @@ func putCredentialsWithConfig(t *testing.T, db *sql.DB, cfg *Config, body creden
 	t.Helper()
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPut, "/api/auth/credentials", bytes.NewReader(b))
+	// Changing an existing password is self-service, so the handler reads who
+	// is acting from the session context authMiddleware would have set. A
+	// first-time setup call (no current password) has no session, by
+	// definition — that is the case the route exists to bootstrap.
+	if body.CurrentPassword != "" {
+		req = req.WithContext(context.WithValue(req.Context(), sessionUserKey, "admin"))
+	}
 	rec := httptest.NewRecorder()
 	handlePutCredentials(db, cfg)(rec, req)
 	return rec
@@ -367,7 +375,7 @@ func TestCredentialsUpdateRejectsWrongCurrentPasswordWith401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("update with wrong current password = %d, want 401", rec.Code)
 	}
-	if !verifyCredentials(db, "admin", "correct-horse") {
+	if !credOK(db, "admin", "correct-horse") {
 		t.Error("a rejected update still changed the stored password")
 	}
 }
@@ -396,10 +404,10 @@ func TestCredentialsUpdateChangesBothAndRotatesSessions(t *testing.T) {
 		t.Fatalf("update = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
 
-	if !verifyCredentials(db, "operator", "brand-new-password") {
+	if !credOK(db, "operator", "brand-new-password") {
 		t.Error("new credentials do not verify")
 	}
-	if verifyCredentials(db, "admin", "correct-horse") {
+	if credOK(db, "admin", "correct-horse") {
 		t.Error("old credentials still verify after the change")
 	}
 
@@ -448,7 +456,7 @@ func TestCredentialsUsernameOnlyChangeKeepsPassword(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("username-only update = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
-	if !verifyCredentials(db, "operator", "correct-horse") {
+	if !credOK(db, "operator", "correct-horse") {
 		t.Error("password did not survive a username-only change")
 	}
 }
@@ -462,7 +470,7 @@ func TestCredentialsPasswordOnlyChangeKeepsUsername(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("password-only update = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
-	if !verifyCredentials(db, "admin", "brand-new-password") {
+	if !credOK(db, "admin", "brand-new-password") {
 		t.Error("username did not survive a password-only change")
 	}
 }
@@ -476,7 +484,7 @@ func TestCredentialsUpdateRejectsShortPassword(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("short password = %d, want 400", rec.Code)
 	}
-	if !verifyCredentials(db, "admin", "correct-horse") {
+	if !credOK(db, "admin", "correct-horse") {
 		t.Error("a rejected short password still changed the store")
 	}
 }
@@ -499,7 +507,7 @@ func TestFirstTimeSetupNeedsNoCurrentPassword(t *testing.T) {
 	if !authRequired() {
 		t.Error("gate is still inactive after first-time setup")
 	}
-	if !verifyCredentials(db, "admin", "brand-new-password") {
+	if !credOK(db, "admin", "brand-new-password") {
 		t.Error("credentials were not stored by first-time setup")
 	}
 }
@@ -838,4 +846,11 @@ func TestScopedApiTokenIsHashedInPlaceOnFirstUse(t *testing.T) {
 	if _, ok := lookupScopedToken(db, "not-a-token"); ok {
 		t.Error("an unknown bearer resolved to a service")
 	}
+}
+
+// credOK is verifyCredentials reduced to a boolean, so assertions that predate
+// roles stay readable.
+func credOK(db *sql.DB, user, pass string) bool {
+	_, ok := verifyCredentials(db, user, pass)
+	return ok
 }

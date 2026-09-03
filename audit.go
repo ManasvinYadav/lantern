@@ -21,13 +21,16 @@ type AuditEntry struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// auditActor identifies who performed a mutating admin request. Lantern has
-// no multi-user model yet (see the RBAC feature-gap note), so every session,
-// Basic Auth, or admin-bearer-token caller shares one identity; a scoped
-// token is distinguished by the service it was issued for.
+// auditActor identifies who performed a mutating admin request: the signed-in
+// username where there is one, the service a scoped token was issued for
+// otherwise. "admin" is the remaining fallback — the LANTERN_AUTH_TOKEN
+// bearer credential, which names no account.
 func auditActor(r *http.Request) string {
 	if svc, ok := r.Context().Value(scopedServiceKey).(string); ok && svc != "" {
 		return "token:" + svc
+	}
+	if user, ok := r.Context().Value(sessionUserKey).(string); ok && user != "" {
+		return user
 	}
 	return "admin"
 }
