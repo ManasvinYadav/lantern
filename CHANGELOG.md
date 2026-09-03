@@ -9,6 +9,22 @@ good idea.
 
 ---
 
+## v0.63.0 — Service-group status rollup
+
+### Added
+
+- **`GET /api/groups` (and its public counterpart) now returns an aggregate
+  health rollup per group**, not just a member count. `GroupSummary` gained
+  `status` (the worst status across the group's member services — down beats
+  degraded beats up beats unknown, the same ranking the heartbeat strip uses
+  to pick a bucket's dominant status) and `maintenance` (true if any member
+  currently has maintenance mode enabled). The dashboard's collapsible group
+  headers show a live status dot driven by this rollup, computed the same
+  way client-side from `state.services` so it updates in real time over the
+  WebSocket feed without an extra poll; a group with anything down or
+  degraded always shows that, even if others in it are paused for
+  maintenance.
+
 ## v0.62.4 — Monitor response validation, and a scoped-token gap closed
 
 ### Added

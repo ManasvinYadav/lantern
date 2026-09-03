@@ -658,6 +658,12 @@
     .service-card.maintenance .status-dot { background: var(--maint); color: var(--maint); box-shadow: 0 0 8px var(--maint-glow); }
     .service-card.unknown .status-dot { background: var(--unknown); color: var(--unknown); box-shadow: 0 0 8px var(--unknown-glow); }
     .service-card.unknown .status-dot::after { animation: none; }
+    .service-group-header.up .status-dot { background: var(--up); color: var(--up); box-shadow: 0 0 8px var(--up-glow); }
+    .service-group-header.down .status-dot { background: var(--down); color: var(--down); box-shadow: 0 0 8px var(--down-glow); }
+    .service-group-header.degraded .status-dot { background: var(--degraded); color: var(--degraded); box-shadow: 0 0 8px var(--degraded-glow); }
+    .service-group-header.maintenance .status-dot { background: var(--maint); color: var(--maint); box-shadow: 0 0 8px var(--maint-glow); }
+    .service-group-header.unknown .status-dot { background: var(--unknown); color: var(--unknown); box-shadow: 0 0 8px var(--unknown-glow); }
+    .service-group-header.unknown .status-dot::after { animation: none; }
     
     @keyframes pulse-ring {
       0% { transform: scale(0.9); opacity: 0.8; }
@@ -5417,6 +5423,31 @@
 
     function groupKeyFor(svc) { return (svc.group_name || '').trim() || 'Ungrouped'; }
 
+    // Mirrors statusPriority() in extensions.go: down outranks degraded
+    // outranks up outranks unknown, so a group's rollup shows its worst
+    // member. Maintenance is tracked separately, same as the backend's
+    // GroupSummary — it only surfaces in the dot when nothing is actually
+    // down or degraded, so a real outage is never masked by a paused check.
+    function statusRank(s) {
+      switch (s) {
+        case 'down': return 3;
+        case 'degraded': return 2;
+        case 'up': return 1;
+        default: return 0;
+      }
+    }
+
+    function groupRollup(services) {
+      let status = 'unknown';
+      let maintenance = false;
+      services.forEach(s => {
+        if (s.maintenance) maintenance = true;
+        if (statusRank(s.status) > statusRank(status)) status = s.status || 'unknown';
+      });
+      const cls = (maintenance && statusRank(status) < statusRank('degraded')) ? 'maintenance' : status;
+      return { cls };
+    }
+
     function collapsedGroups() {
       try { return JSON.parse(localStorage.getItem('lantern_collapsed_groups') || '[]'); }
       catch (e) { return []; }
@@ -5468,28 +5499,32 @@
           section.innerHTML = `
             <button type="button" class="service-group-header" aria-expanded="true">
               <svg class="service-group-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <div class="status-dot"></div>
               <span class="service-group-name"></span>
               <span class="service-group-count"></span>
             </button>
             <div class="service-group-body"></div>`;
           section.querySelector('.service-group-name').innerText = key;
         }
+        const members = byGroup.get(key);
         const count = section.querySelector('.service-group-count');
-        const n = byGroup.get(key).length;
+        const n = members.length;
         const countText = String(n);
         if (count.innerText !== countText) count.innerText = countText;
-        section.querySelector('.service-group-header')
-               .setAttribute('aria-label', `${key}, ${n} service${n === 1 ? '' : 's'}`);
+        const header = section.querySelector('.service-group-header');
+        const rollup = groupRollup(members);
+        const headerClass = 'service-group-header ' + rollup.cls;
+        if (header.className !== headerClass) header.className = headerClass;
+        header.setAttribute('aria-label', `${key}, ${n} service${n === 1 ? '' : 's'}, ${rollup.cls}`);
 
         const collapsed = isGroupCollapsed(key);
         section.classList.toggle('collapsed', collapsed);
-        section.querySelector('.service-group-header')
-               .setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
 
         const at = grid.children[index];
         if (at !== section) grid.insertBefore(section, at || null);
 
-        reconcileCards(section.querySelector('.service-group-body'), byGroup.get(key));
+        reconcileCards(section.querySelector('.service-group-body'), members);
       });
     }
 

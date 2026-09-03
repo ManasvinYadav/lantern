@@ -607,3 +607,93 @@ func TestServiceHistoryReturnsLatency(t *testing.T) {
 		t.Error("latency_ms is missing from the serialised response")
 	}
 }
+
+// TestHandleGetGroupsRollup covers the worst-status-wins aggregation: a group
+// with one down member and two up members must report "down" even though
+// down is the minority, and its per-service maintenance flag must surface
+// independently of that status rollup.
+func TestHandleGetGroupsRollup(t *testing.T) {
+	db := newTestDB(t)
+
+	seedService := func(name, status, group string, maintenance bool) {
+		if _, err := db.Exec(
+			`INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+			name, status, "seed", "2026-08-26T00:00:00Z"); err != nil {
+			t.Fatalf("seed status_events for %s: %v", name, err)
+		}
+		if group != "" {
+			if _, err := db.Exec(
+				`INSERT INTO service_groups (service_name, group_name) VALUES (?,?)`, name, group); err != nil {
+				t.Fatalf("seed service_groups for %s: %v", name, err)
+			}
+		}
+		if maintenance {
+			if _, err := db.Exec(
+				`INSERT INTO service_maintenance (service_name, enabled) VALUES (?,?)`, name, 1); err != nil {
+				t.Fatalf("seed service_maintenance for %s: %v", name, err)
+			}
+		}
+	}
+
+	// "web" group: majority up, one down -> rollup must be "down".
+	seedService("web-1", "up", "web", false)
+	seedService("web-2", "up", "web", false)
+	seedService("web-3", "down", "web", false)
+
+	// "db" group: all up, one under maintenance -> status "up", maintenance true.
+	seedService("db-1", "up", "db", false)
+	seedService("db-2", "up", "db", true)
+
+	// Ungrouped service must not appear in the response at all.
+	seedService("standalone", "down", "", false)
+
+	r := mux.NewRouter()
+	r.Handle("/api/groups", handleGetGroups(db)).Methods(http.MethodGet)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/groups", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var groups []GroupSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("groups = %d, want 2 (got %+v)", len(groups), groups)
+	}
+
+	byName := map[string]GroupSummary{}
+	for _, g := range groups {
+		byName[g.Name] = g
+	}
+
+	web, ok := byName["web"]
+	if !ok {
+		t.Fatalf("missing group %q in %+v", "web", groups)
+	}
+	if web.Count != 3 {
+		t.Errorf("web.Count = %d, want 3", web.Count)
+	}
+	if web.Status != "down" {
+		t.Errorf("web.Status = %q, want %q (worst member must win)", web.Status, "down")
+	}
+	if web.Maintenance {
+		t.Error("web.Maintenance = true, want false")
+	}
+
+	dbGroup, ok := byName["db"]
+	if !ok {
+		t.Fatalf("missing group %q in %+v", "db", groups)
+	}
+	if dbGroup.Count != 2 {
+		t.Errorf("db.Count = %d, want 2", dbGroup.Count)
+	}
+	if dbGroup.Status != "up" {
+		t.Errorf("db.Status = %q, want %q", dbGroup.Status, "up")
+	}
+	if !dbGroup.Maintenance {
+		t.Error("db.Maintenance = false, want true (one member is under maintenance)")
+	}
+}

@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.62.4"
+const version = "0.63.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -2123,22 +2123,29 @@ func handleGetActivity(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GroupSummary represents a service group and the number of services in it.
+// GroupSummary represents a service group, the number of services in it, and
+// an aggregate rollup of its members' health.
 type GroupSummary struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+	// Status is the worst-case status across the group's member services
+	// (down > degraded > up > unknown) — the same ranking statusPriority
+	// uses to pick the dominant status for a heartbeat strip bucket.
+	Status string `json:"status"`
+	// Maintenance is true if any member service currently has maintenance
+	// mode enabled.
+	Maintenance bool `json:"maintenance"`
 }
 
 // handleGetGroups handles GET /api/groups.
 func handleGetGroups(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`
-			SELECT COALESCE(g.group_name, ''), COUNT(DISTINCT s.service_name)
+			SELECT COALESCE(g.group_name, ''), s.status, COALESCE(mt.enabled, 0)
 			FROM status_events s
 			LEFT JOIN service_groups g ON s.service_name = g.service_name
-			WHERE s.id IN (SELECT MAX(id) FROM status_events GROUP BY service_name)
-			GROUP BY COALESCE(g.group_name, '')
-			ORDER BY COALESCE(g.group_name, '') ASC;
+			LEFT JOIN service_maintenance mt ON s.service_name = mt.service_name
+			WHERE s.id IN (SELECT MAX(id) FROM status_events GROUP BY service_name);
 		`)
 		if err != nil {
 			log.Printf("handleGetGroups db error: %v", err)
@@ -2147,15 +2154,53 @@ func handleGetGroups(db *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		groups := []GroupSummary{}
+		type groupAgg struct {
+			count       int
+			status      string
+			maintenance bool
+		}
+		aggs := map[string]*groupAgg{}
+		var order []string
+
 		for rows.Next() {
-			var g GroupSummary
-			if err := rows.Scan(&g.Name, &g.Count); err != nil {
+			var name, status string
+			var maint int
+			if err := rows.Scan(&name, &status, &maint); err != nil {
 				continue
 			}
-			if g.Name != "" {
-				groups = append(groups, g)
+			if name == "" {
+				continue
 			}
+			a, ok := aggs[name]
+			if !ok {
+				a = &groupAgg{status: "unknown"}
+				aggs[name] = a
+				order = append(order, name)
+			}
+			a.count++
+			if maint == 1 {
+				a.maintenance = true
+			}
+			if statusPriority(status) > statusPriority(a.status) {
+				a.status = status
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("handleGetGroups rows error: %v", err)
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		sort.Strings(order)
+		groups := []GroupSummary{}
+		for _, name := range order {
+			a := aggs[name]
+			groups = append(groups, GroupSummary{
+				Name:        name,
+				Count:       a.count,
+				Status:      a.status,
+				Maintenance: a.maintenance,
+			})
 		}
 		writeJSON(w, http.StatusOK, groups)
 	}
