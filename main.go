@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.64.0"
+const version = "0.65.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -314,6 +314,11 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created
 		log.Fatalf("failed to apply feature schema: %v", err)
 	}
 
+	// Quiet-hours notification schedule and its digest queue (see notifications.go).
+	if _, err := db.Exec(notificationScheduleSchema); err != nil {
+		log.Fatalf("failed to apply notification schedule schema: %v", err)
+	}
+
 	// Additive column migrations. Each is a no-op on every boot after the
 	// first, so the expected error is "duplicate column name" — see
 	// applyMigration, which tells that apart from a real failure.
@@ -449,6 +454,10 @@ func isProtectedEndpoint(r *http.Request) bool {
 		return true
 	case strings.HasSuffix(path, "/maintenance") && method != http.MethodGet:
 		return true
+	// A global (not per-service) schedule affecting every service's
+	// notifications. Reading it is harmless; changing it is administrative.
+	case path == "/api/notifications/schedule" && method != http.MethodGet:
+		return true
 	case strings.HasSuffix(path, "/monitor") && method != http.MethodGet:
 		return true
 	case strings.HasSuffix(path, "/check") && method == http.MethodPost:
@@ -487,6 +496,11 @@ func isAdminOnlyEndpoint(r *http.Request) bool {
 	case strings.HasPrefix(path, "/api/config/"):
 		return true
 	case strings.HasPrefix(path, "/api/admin/"):
+		return true
+	// The quiet-hours schedule is global, not per-service — a token scoped
+	// to one service has no legitimate reason to change when every
+	// service's notifications go quiet.
+	case path == "/api/notifications/schedule":
 		return true
 	}
 	return false
@@ -1368,7 +1382,18 @@ func ingestStatusEvent(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, h
 	db.QueryRow("SELECT enabled FROM service_maintenance WHERE service_name = ?", serviceName).Scan(&maint)
 	if maint == 0 {
 		if fire, _ := shouldNotify(prev2, prev1, status); fire {
-			dispatchWebhooks(dispatcher, db, cfg, serviceName, prev1, status, message)
+			// Quiet hours sit alongside per-service maintenance: same
+			// suppression, but time-scheduled and global rather than manual
+			// and per-service. "mute" drops the notification the same way
+			// maintenance does; "digest" queues it for one combined message
+			// once the window closes (see flushDigestIfDue).
+			if active, mode := quietHoursActive(db, time.Now()); active {
+				if mode == "digest" {
+					queueDigestEvent(db, serviceName, prev1, status, message, ts)
+				}
+			} else {
+				dispatchWebhooks(dispatcher, db, cfg, serviceName, prev1, status, message)
+			}
 		}
 	}
 
@@ -2510,6 +2535,8 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/webhooks", handlePutWebhooks(db)).Methods(http.MethodPut, http.MethodPost)
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
+	api.Handle("/notifications/schedule", handleGetNotificationSchedule(db)).Methods(http.MethodGet)
+	api.Handle("/notifications/schedule", handlePutNotificationSchedule(db)).Methods(http.MethodPut)
 	api.Handle("/activity", handleGetActivity(db)).Methods(http.MethodGet)
 	api.Handle("/admin/audit-log", handleGetAuditLog(db)).Methods(http.MethodGet)
 	api.Handle("/backup", handleBackup(db)).Methods(http.MethodGet)
@@ -2677,6 +2704,9 @@ func main() {
 
 	// Background worker for missing heartbeats
 	go runStaleChecker(db, cfg, dispatcher, hub)
+
+	// Flushes queued digest notifications once the quiet-hours window closes.
+	go runDigestFlusher(dispatcher, db, cfg)
 
 	// Resolve DOCKER_HOST (or fall back to Unix socket) once at startup.
 	// This must run before runDockerDiscovery and before any HTTP handler

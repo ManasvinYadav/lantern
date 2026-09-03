@@ -1157,6 +1157,7 @@ var serviceScopedTables = []string{
 	"active_monitors",
 	"api_tokens",
 	"service_alert_routes",
+	"notification_digest_queue",
 }
 
 // handleDeleteService handles DELETE /api/services/{name}.

@@ -387,6 +387,8 @@ func TestHandleDeleteServiceCascade(t *testing.T) {
 		{`INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled) VALUES (?,?,?,?,?)`,
 			[]any{svc, "http", "https://example.com", 60, 1}},
 		{`INSERT INTO api_tokens (token, service_name) VALUES (?,?)`, []any{"tok-cascade", svc}},
+		{`INSERT INTO notification_digest_queue (service_name, old_status, new_status, occurred_at) VALUES (?,?,?,?)`,
+			[]any{svc, "up", "down", "2026-08-26T00:00:00Z"}},
 		// Must survive the delete.
 		{`INSERT INTO webhook_deliveries (channel, service_name, old_status, new_status, success, http_status, created_at) VALUES (?,?,?,?,?,?,?)`,
 			[]any{"discord", svc, "up", "down", 1, 204, "2026-08-26T00:00:00Z"}},

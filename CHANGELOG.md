@@ -9,6 +9,27 @@ good idea.
 
 ---
 
+## v0.65.0 — Notification quiet hours (mute or digest)
+
+### Added
+
+- **A global, scheduled quiet-hours window for notifications** —
+  `GET`/`PUT /api/notifications/schedule`, and a new "Quiet Hours" section
+  in Settings → Alerts & Webhooks. Configure a daily UTC start/end time
+  (wrapping past midnight is fine, e.g. 22:00-08:00) and a mode:
+  - **Mute**: notifications during the window are dropped, the same way
+    per-service maintenance mode already works, just time-scheduled and
+    global instead of manual and per-service.
+  - **Digest**: notifications during the window are queued instead of
+    dropped, then sent as one combined message per channel — respecting
+    each service's existing alert routing — as soon as the window closes.
+    A background flusher checks every minute.
+
+  This sits alongside, not instead of, per-service maintenance mode: both
+  are independent suppression paths into the same notification dispatch.
+  Closes the "only binary maintenance mode; no scheduled quiet hours or
+  batched digest" feature-gap.
+
 ## v0.64.0 — Admin action audit log
 
 ### Added

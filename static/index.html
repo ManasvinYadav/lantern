@@ -2302,6 +2302,39 @@
             <div id="webhookSummary" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;"></div>
           </div>
 
+          <!-- Quiet Hours: mute or digest notifications during a daily UTC window -->
+          <div style="padding-top:16px; border-top:1px solid var(--border);">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+              <div class="section-label" style="margin-bottom:0;">Quiet Hours</div>
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-secondary); cursor:pointer;">
+                <input type="checkbox" id="quietHoursEnabled">
+                Enabled
+              </label>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+              Silence or batch every service's notifications during a daily window, instead of each status change firing immediately. Independent of per-service maintenance mode.
+            </div>
+            <div style="display:flex; gap:12px; align-items:flex-end; margin-top:12px; flex-wrap:wrap;">
+              <label style="font-size:11px; color:var(--text-secondary); display:flex; flex-direction:column; gap:4px;">
+                Start (UTC)
+                <input type="time" id="quietHoursStart" class="btn" style="background:var(--bg); border-color:var(--border);">
+              </label>
+              <label style="font-size:11px; color:var(--text-secondary); display:flex; flex-direction:column; gap:4px;">
+                End (UTC)
+                <input type="time" id="quietHoursEnd" class="btn" style="background:var(--bg); border-color:var(--border);">
+              </label>
+              <label style="font-size:11px; color:var(--text-secondary); display:flex; flex-direction:column; gap:4px;">
+                Mode
+                <select id="quietHoursMode" class="btn" style="background:var(--bg); border-color:var(--border);">
+                  <option value="mute">Mute (drop entirely)</option>
+                  <option value="digest">Digest (one summary after)</option>
+                </select>
+              </label>
+              <button type="button" class="btn primary" id="btnSaveQuietHours" style="font-size:11px; padding:6px 12px;">Save</button>
+            </div>
+            <div id="quietHoursStatus" style="font-size:11px; color:var(--text-muted); margin-top:8px;"></div>
+          </div>
+
           <!-- Recent Delivery Log Section -->
           <div style="padding-top:16px; border-top:1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -2441,6 +2474,7 @@
       badge: (name) => `/api/badge/${encodeURIComponent(name)}.svg`,
       activity: '/api/activity',
       auditLog: '/api/admin/audit-log',
+      notificationSchedule: '/api/notifications/schedule',
       exportHistory: (name, format) => `/api/services/${encodeURIComponent(name)}/export?format=${format}`,
       backup: '/api/backup'
     };
@@ -4493,6 +4527,9 @@
         const btnRefreshDeliveries = document.getElementById('btnRefreshDeliveries');
         if (btnRefreshDeliveries) btnRefreshDeliveries.addEventListener('click', loadWebhookDeliveries);
 
+        const btnSaveQuietHours = document.getElementById('btnSaveQuietHours');
+        if (btnSaveQuietHours) btnSaveQuietHours.addEventListener('click', saveQuietHours);
+
         const btnSaveAdminToken = document.getElementById('btnSaveAdminToken');
         if (btnSaveAdminToken) btnSaveAdminToken.addEventListener('click', saveAdminToken);
 
@@ -4624,7 +4661,69 @@
       loadWebhookSettings();
       loadWebhookDeliveries();
       loadActiveMonitors();
+      loadQuietHours();
       refreshAnnouncementState();
+    }
+
+    // minutesToTimeInput / timeInputToMinutes convert between the API's
+    // minutes-since-midnight-UTC and the <input type="time"> control's
+    // "HH:MM" string, so the UTC-ness lives here rather than being repeated
+    // at each call site.
+    function minutesToTimeInput(min) {
+      const h = Math.floor((min || 0) / 60) % 24;
+      const m = (min || 0) % 60;
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
+
+    function timeInputToMinutes(hhmm) {
+      const parts = String(hhmm || '00:00').split(':');
+      const h = parseInt(parts[0], 10) || 0;
+      const m = parseInt(parts[1], 10) || 0;
+      return h * 60 + m;
+    }
+
+    async function loadQuietHours() {
+      const statusEl = document.getElementById('quietHoursStatus');
+      try {
+        const res = await authFetch(API.notificationSchedule);
+        if (!res.ok) throw new Error('failed to load');
+        const s = await res.json();
+        document.getElementById('quietHoursEnabled').checked = !!s.enabled;
+        document.getElementById('quietHoursStart').value = minutesToTimeInput(s.start_minute);
+        document.getElementById('quietHoursEnd').value = minutesToTimeInput(s.end_minute);
+        document.getElementById('quietHoursMode').value = s.mode || 'mute';
+        if (statusEl) statusEl.textContent = '';
+      } catch (err) {
+        console.error('Error loading quiet hours schedule:', err);
+        if (statusEl) statusEl.textContent = 'Failed to load quiet hours schedule.';
+      }
+    }
+
+    async function saveQuietHours() {
+      const statusEl = document.getElementById('quietHoursStatus');
+      const payload = {
+        enabled: document.getElementById('quietHoursEnabled').checked,
+        start_minute: timeInputToMinutes(document.getElementById('quietHoursStart').value),
+        end_minute: timeInputToMinutes(document.getElementById('quietHoursEnd').value),
+        mode: document.getElementById('quietHoursMode').value,
+      };
+      try {
+        const res = await authFetch(API.notificationSchedule, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'save failed');
+        }
+        if (statusEl) statusEl.textContent = 'Saved.';
+        showToast('Quiet hours schedule saved', 'success');
+      } catch (err) {
+        console.error('Error saving quiet hours schedule:', err);
+        if (statusEl) statusEl.textContent = 'Failed to save: ' + err.message;
+        showToast('Failed to save quiet hours schedule', 'error');
+      }
     }
 
     function saveAdminToken() {
@@ -5983,7 +6082,9 @@
       const list = document.getElementById('auditLogList');
       list.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">Loading audit log...</div>';
       try {
-        const res = await fetch(API.auditLog + '?limit=100');
+        // Admin-only server-side (isAdminOnlyEndpoint), so this needs the
+        // bearer token in token-mode deployments, unlike the activity feed.
+        const res = await authFetch(API.auditLog + '?limit=100');
         if (!res.ok) throw new Error('Failed to load audit log');
         const entries = await res.json();
 
