@@ -9,27 +9,71 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tidwall/gjson"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
 
 var validMonitorTypes = map[string]bool{"http": true, "tcp": true, "ping": true}
 
+// bodyPatternCache holds compiled body_pattern regexes, keyed by the pattern
+// string itself. handlePutServiceMonitor already validates every pattern via
+// regexp.Compile before it's persisted, so checkHTTP re-compiling the same
+// pattern on every check tick (every interval_seconds, for every HTTP monitor
+// that uses this field) is pure repeated work — cache it instead, mirroring
+// the caching already done for the more expensive uptime-metrics path
+// (getCachedOrComputeServiceMetrics in extensions.go). Keying by pattern
+// string rather than service name means a changed pattern is simply a cache
+// miss under its new key; stale entries under abandoned keys are harmless and
+// bounded by the number of distinct patterns ever configured.
+var (
+	bodyPatternCacheMu sync.RWMutex
+	bodyPatternCache   = make(map[string]*regexp.Regexp)
+)
+
+// compiledBodyPattern returns a compiled regexp for pattern, using the cache
+// when possible. Errors are only expected here in practice if a pattern was
+// persisted before validation existed, or written directly to the DB.
+func compiledBodyPattern(pattern string) (*regexp.Regexp, error) {
+	bodyPatternCacheMu.RLock()
+	re, ok := bodyPatternCache[pattern]
+	bodyPatternCacheMu.RUnlock()
+	if ok {
+		return re, nil
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	bodyPatternCacheMu.Lock()
+	bodyPatternCache[pattern] = re
+	bodyPatternCacheMu.Unlock()
+	return re, nil
+}
+
 const (
 	minMonitorIntervalSeconds = 10
 	maxMonitorIntervalSeconds = 3600
 	monitorCheckTimeout       = 10 * time.Second
 	monitorQueueSize          = 256
+	// maxHTTPCheckBody caps how much of an HTTP monitor's response body is
+	// read for body_pattern/json_path evaluation, mirroring maxDiagnosticsBody's
+	// defensive cap on request bodies elsewhere in this codebase.
+	maxHTTPCheckBody = 1 << 20 // 1 MiB
 )
 
 // Certificate expiry thresholds, in days. Set from Config at startup; the
@@ -80,6 +124,12 @@ type ActiveMonitor struct {
 	// anything that is not "ok". CertStatus is the useful one.
 	CertWarning bool   `json:"cert_warning"`
 	CertStatus  string `json:"cert_status,omitempty"`
+	// BodyPattern, JSONPath and JSONExpect are optional "http" monitor checks
+	// layered on top of the status-code check: nil means that check is not
+	// configured. See checkHTTP.
+	BodyPattern *string `json:"body_pattern,omitempty"`
+	JSONPath    *string `json:"json_path,omitempty"`
+	JSONExpect  *string `json:"json_expect,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +140,11 @@ type monitorCheckJob struct {
 	serviceName string
 	monitorType string
 	target      string
+	// BodyPattern, JSONPath and JSONExpect mirror ActiveMonitor's fields of
+	// the same name: nil means that check is not configured for this run.
+	BodyPattern *string `json:"body_pattern,omitempty"`
+	JSONPath    *string `json:"json_path,omitempty"`
+	JSONExpect  *string `json:"json_expect,omitempty"`
 }
 
 type monitorPool struct {
@@ -177,7 +232,17 @@ func (p *monitorPool) worker() {
 func (p *monitorPool) runCheck(job monitorCheckJob) (status, message string, certExpiry *time.Time) {
 	switch job.monitorType {
 	case "http":
-		return checkHTTP(p.httpClient, job.target)
+		bodyPattern, jsonPath, jsonExpect := "", "", ""
+		if job.BodyPattern != nil {
+			bodyPattern = *job.BodyPattern
+		}
+		if job.JSONPath != nil {
+			jsonPath = *job.JSONPath
+		}
+		if job.JSONExpect != nil {
+			jsonExpect = *job.JSONExpect
+		}
+		return checkHTTP(p.httpClient, job.target, bodyPattern, jsonPath, jsonExpect)
 	case "tcp":
 		s, m := checkTCP(job.target)
 		return s, m, nil
@@ -189,27 +254,64 @@ func (p *monitorPool) runCheck(job monitorCheckJob) (status, message string, cer
 	}
 }
 
-// checkHTTP performs a GET request; 2xx/3xx is up, anything else (including
-// transport errors and timeouts) is down. For HTTPS targets, also returns
-// the leaf certificate's expiry so callers can warn ahead of renewal.
-func checkHTTP(client *http.Client, target string) (status, message string, certExpiry *time.Time) {
+// checkHTTP performs a GET request. The status-code check runs first, exactly
+// as before: anything other than 2xx/3xx (including transport errors and
+// timeouts) is down, regardless of bodyPattern/jsonPath. For HTTPS targets,
+// it also returns the leaf certificate's expiry so callers can warn ahead of
+// renewal.
+//
+// bodyPattern and jsonPath are additional, optional checks layered on top of
+// the status-code check; an empty string means that check is not configured.
+// When bodyPattern is non-empty, the response body must match it as a regexp.
+// When jsonPath is non-empty, the JSON field it selects (dotted path, per
+// gjson's syntax) must equal jsonExpect. All configured checks must pass for
+// "up"; the first one that fails determines the "down" message.
+func checkHTTP(client *http.Client, target, bodyPattern, jsonPath, jsonExpect string) (status, message string, certExpiry *time.Time) {
 	start := time.Now()
 	resp, err := client.Get(target)
 	if err != nil {
 		return "down", err.Error(), nil
 	}
 	defer resp.Body.Close()
-	rtt := time.Since(start)
 
 	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
 		notAfter := resp.TLS.PeerCertificates[0].NotAfter
 		certExpiry = &notAfter
 	}
 
-	if resp.StatusCode < 400 {
-		return "up", fmt.Sprintf("HTTP %d in %s", resp.StatusCode, rtt.Round(time.Millisecond)), certExpiry
+	if resp.StatusCode >= 400 {
+		return "down", fmt.Sprintf("HTTP %d", resp.StatusCode), certExpiry
 	}
-	return "down", fmt.Sprintf("HTTP %d", resp.StatusCode), certExpiry
+
+	// Only read the body when a check actually needs it — the common case
+	// (status-code check only) shouldn't pay for draining the response.
+	var body []byte
+	if bodyPattern != "" || jsonPath != "" {
+		body, err = io.ReadAll(io.LimitReader(resp.Body, maxHTTPCheckBody))
+		if err != nil {
+			return "down", fmt.Sprintf("failed to read response body: %v", err), certExpiry
+		}
+	}
+
+	if bodyPattern != "" {
+		re, err := compiledBodyPattern(bodyPattern)
+		if err != nil {
+			return "down", fmt.Sprintf("invalid body_pattern regex: %v", err), certExpiry
+		}
+		if !re.Match(body) {
+			return "down", "body pattern mismatch", certExpiry
+		}
+	}
+
+	if jsonPath != "" {
+		got := gjson.GetBytes(body, jsonPath).String()
+		if got != jsonExpect {
+			return "down", fmt.Sprintf("json path %s = %s, want %s", jsonPath, got, jsonExpect), certExpiry
+		}
+	}
+
+	rtt := time.Since(start)
+	return "up", fmt.Sprintf("HTTP %d in %s", resp.StatusCode, rtt.Round(time.Millisecond)), certExpiry
 }
 
 // checkTCP attempts a TCP connection to target ("host:port"); success is up.
@@ -319,7 +421,7 @@ func newMonitorScheduler(db *sql.DB, pool *monitorPool) *monitorScheduler {
 // loadAndStartAll starts a ticker for every enabled monitor found in the DB.
 // Called once at startup.
 func (s *monitorScheduler) loadAndStartAll() {
-	rows, err := s.db.Query(`SELECT service_name, monitor_type, target, interval_seconds FROM active_monitors WHERE enabled = 1`)
+	rows, err := s.db.Query(`SELECT service_name, monitor_type, target, interval_seconds, body_pattern, json_path, json_expect FROM active_monitors WHERE enabled = 1`)
 	if err != nil {
 		log.Printf("monitorScheduler: failed to load monitors: %v", err)
 		return
@@ -327,19 +429,20 @@ func (s *monitorScheduler) loadAndStartAll() {
 	defer rows.Close()
 
 	type m struct {
-		name, mtype, target string
-		interval            int
+		name, mtype, target               string
+		interval                          int
+		bodyPattern, jsonPath, jsonExpect sql.NullString
 	}
 	var monitors []m
 	for rows.Next() {
 		var x m
-		if err := rows.Scan(&x.name, &x.mtype, &x.target, &x.interval); err != nil {
+		if err := rows.Scan(&x.name, &x.mtype, &x.target, &x.interval, &x.bodyPattern, &x.jsonPath, &x.jsonExpect); err != nil {
 			continue
 		}
 		monitors = append(monitors, x)
 	}
 	for _, x := range monitors {
-		s.start(x.name, x.mtype, x.target, x.interval)
+		s.start(x.name, x.mtype, x.target, x.interval, nullStringPtr(x.bodyPattern), nullStringPtr(x.jsonPath), nullStringPtr(x.jsonExpect))
 	}
 	log.Printf("monitorScheduler: started %d active monitor(s)", len(monitors))
 }
@@ -353,7 +456,7 @@ func (s *monitorScheduler) loadAndStartAll() {
 // then unreachable, so its ticker ran for the lifetime of the process, still
 // enqueuing checks and still writing status_events. The visible symptom was a
 // service that reappeared after being deleted.
-func (s *monitorScheduler) start(serviceName, monitorType, target string, intervalSeconds int) {
+func (s *monitorScheduler) start(serviceName, monitorType, target string, intervalSeconds int, bodyPattern, jsonPath, jsonExpect *string) {
 	stop := make(chan struct{})
 
 	s.mu.Lock()
@@ -367,7 +470,7 @@ func (s *monitorScheduler) start(serviceName, monitorType, target string, interv
 	go func() {
 		// Run an immediate check on (re)start so status appears right away
 		// instead of waiting a full interval.
-		s.pool.enqueue(monitorCheckJob{serviceName: serviceName, monitorType: monitorType, target: target})
+		s.pool.enqueue(monitorCheckJob{serviceName: serviceName, monitorType: monitorType, target: target, BodyPattern: bodyPattern, JSONPath: jsonPath, JSONExpect: jsonExpect})
 
 		ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
@@ -376,7 +479,7 @@ func (s *monitorScheduler) start(serviceName, monitorType, target string, interv
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.pool.enqueue(monitorCheckJob{serviceName: serviceName, monitorType: monitorType, target: target})
+				s.pool.enqueue(monitorCheckJob{serviceName: serviceName, monitorType: monitorType, target: target, BodyPattern: bodyPattern, JSONPath: jsonPath, JSONExpect: jsonExpect})
 			}
 		}
 	}()
@@ -435,10 +538,20 @@ func applyCertFields(m *ActiveMonitor, certExpiry sql.NullString) {
 	m.CertWarning = m.CertStatus != certStatusOK
 }
 
+// nullStringPtr converts a scanned nullable TEXT column to *string: nil for
+// SQL NULL, a pointer to the value otherwise. Used for body_pattern,
+// json_path and json_expect, whose NULL means "no check configured".
+func nullStringPtr(s sql.NullString) *string {
+	if !s.Valid {
+		return nil
+	}
+	return &s.String
+}
+
 // handleGetMonitors handles GET /api/monitors — lists every configured active monitor.
 func handleGetMonitors(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.Query(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at FROM active_monitors ORDER BY service_name ASC`)
+		rows, err := db.Query(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at, body_pattern, json_path, json_expect FROM active_monitors ORDER BY service_name ASC`)
 		if err != nil {
 			log.Printf("handleGetMonitors db error: %v", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -450,8 +563,8 @@ func handleGetMonitors(db *sql.DB) http.HandlerFunc {
 		for rows.Next() {
 			var m ActiveMonitor
 			var enabled int
-			var lastChecked, certExpiry sql.NullString
-			if err := rows.Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry); err != nil {
+			var lastChecked, certExpiry, bodyPattern, jsonPath, jsonExpect sql.NullString
+			if err := rows.Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry, &bodyPattern, &jsonPath, &jsonExpect); err != nil {
 				continue
 			}
 			m.Enabled = enabled == 1
@@ -459,6 +572,9 @@ func handleGetMonitors(db *sql.DB) http.HandlerFunc {
 				m.LastCheckedAt = &lastChecked.String
 			}
 			applyCertFields(&m, certExpiry)
+			m.BodyPattern = nullStringPtr(bodyPattern)
+			m.JSONPath = nullStringPtr(jsonPath)
+			m.JSONExpect = nullStringPtr(jsonExpect)
 			monitors = append(monitors, m)
 		}
 		writeJSON(w, http.StatusOK, monitors)
@@ -471,9 +587,9 @@ func handleGetServiceMonitor(db *sql.DB) http.HandlerFunc {
 		name := mux.Vars(r)["name"]
 		var m ActiveMonitor
 		var enabled int
-		var lastChecked, certExpiry sql.NullString
-		err := db.QueryRow(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at FROM active_monitors WHERE service_name = ?`, name).
-			Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry)
+		var lastChecked, certExpiry, bodyPattern, jsonPath, jsonExpect sql.NullString
+		err := db.QueryRow(`SELECT service_name, monitor_type, target, interval_seconds, enabled, last_checked_at, cert_expiry_at, body_pattern, json_path, json_expect FROM active_monitors WHERE service_name = ?`, name).
+			Scan(&m.ServiceName, &m.MonitorType, &m.Target, &m.IntervalSeconds, &enabled, &lastChecked, &certExpiry, &bodyPattern, &jsonPath, &jsonExpect)
 		if err == sql.ErrNoRows {
 			writeError(w, http.StatusNotFound, "no active monitor configured for this service")
 			return
@@ -488,6 +604,9 @@ func handleGetServiceMonitor(db *sql.DB) http.HandlerFunc {
 			m.LastCheckedAt = &lastChecked.String
 		}
 		applyCertFields(&m, certExpiry)
+		m.BodyPattern = nullStringPtr(bodyPattern)
+		m.JSONPath = nullStringPtr(jsonPath)
+		m.JSONExpect = nullStringPtr(jsonExpect)
 		writeJSON(w, http.StatusOK, m)
 	}
 }
@@ -501,11 +620,20 @@ func handlePutServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Handl
 			return
 		}
 
+		scopedSvc := r.Context().Value(scopedServiceKey)
+		if scopedSvc != nil && scopedSvc.(string) != name {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
 		var req struct {
-			MonitorType     string `json:"monitor_type"`
-			Target          string `json:"target"`
-			IntervalSeconds int    `json:"interval_seconds"`
-			Enabled         *bool  `json:"enabled"`
+			MonitorType     string  `json:"monitor_type"`
+			Target          string  `json:"target"`
+			IntervalSeconds int     `json:"interval_seconds"`
+			Enabled         *bool   `json:"enabled"`
+			BodyPattern     *string `json:"body_pattern"`
+			JSONPath        *string `json:"json_path"`
+			JSONExpect      *string `json:"json_expect"`
 		}
 		if !decodeJSONBody(w, r, maxConfigBody, &req) {
 			return
@@ -527,6 +655,16 @@ func handlePutServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Handl
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("interval_seconds must be between %d and %d", minMonitorIntervalSeconds, maxMonitorIntervalSeconds))
 			return
 		}
+		// json_path/json_expect need no special validation: gjson degrades
+		// gracefully, so a missing key at check time is simply a non-match,
+		// not an error. body_pattern is a regexp, though, and a bad one
+		// would otherwise only surface as a mysterious "down" at check time.
+		if req.BodyPattern != nil && *req.BodyPattern != "" {
+			if _, err := regexp.Compile(*req.BodyPattern); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid body_pattern regex: %v", err))
+				return
+			}
+		}
 		enabled := true
 		if req.Enabled != nil {
 			enabled = *req.Enabled
@@ -537,15 +675,18 @@ func handlePutServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Handl
 		}
 
 		_, err := db.Exec(`
-INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled, updated_at)
-VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled, body_pattern, json_path, json_expect, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(service_name) DO UPDATE SET
     monitor_type = excluded.monitor_type,
     target = excluded.target,
     interval_seconds = excluded.interval_seconds,
     enabled = excluded.enabled,
+    body_pattern = excluded.body_pattern,
+    json_path = excluded.json_path,
+    json_expect = excluded.json_expect,
     updated_at = CURRENT_TIMESTAMP`,
-			name, req.MonitorType, strings.TrimSpace(req.Target), req.IntervalSeconds, enabledInt)
+			name, req.MonitorType, strings.TrimSpace(req.Target), req.IntervalSeconds, enabledInt, req.BodyPattern, req.JSONPath, req.JSONExpect)
 		if err != nil {
 			log.Printf("handlePutServiceMonitor db error: %v", err)
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -553,7 +694,7 @@ ON CONFLICT(service_name) DO UPDATE SET
 		}
 
 		if enabled {
-			scheduler.start(name, req.MonitorType, strings.TrimSpace(req.Target), req.IntervalSeconds)
+			scheduler.start(name, req.MonitorType, strings.TrimSpace(req.Target), req.IntervalSeconds, req.BodyPattern, req.JSONPath, req.JSONExpect)
 		} else {
 			scheduler.stop(name)
 		}
@@ -564,6 +705,9 @@ ON CONFLICT(service_name) DO UPDATE SET
 			Target:          strings.TrimSpace(req.Target),
 			IntervalSeconds: req.IntervalSeconds,
 			Enabled:         enabled,
+			BodyPattern:     req.BodyPattern,
+			JSONPath:        req.JSONPath,
+			JSONExpect:      req.JSONExpect,
 		})
 	}
 }
@@ -573,7 +717,14 @@ ON CONFLICT(service_name) DO UPDATE SET
 // historical status_events are untouched.
 func handleDeleteServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := mux.Vars(r)["name"]
+		name := strings.TrimSpace(mux.Vars(r)["name"])
+
+		scopedSvc := r.Context().Value(scopedServiceKey)
+		if scopedSvc != nil && scopedSvc.(string) != name {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
 		scheduler.stop(name)
 		_, err := db.Exec(`DELETE FROM active_monitors WHERE service_name = ?`, name)
 		if err != nil {

@@ -1237,9 +1237,10 @@ func handlePostServiceCheck(db *sql.DB, scheduler *monitorScheduler) http.Handle
 
 		var monitorType, target string
 		var enabled int
+		var bodyPattern, jsonPath, jsonExpect sql.NullString
 		err := db.QueryRow(
-			`SELECT monitor_type, target, enabled FROM active_monitors WHERE service_name = ?`,
-			name).Scan(&monitorType, &target, &enabled)
+			`SELECT monitor_type, target, enabled, body_pattern, json_path, json_expect FROM active_monitors WHERE service_name = ?`,
+			name).Scan(&monitorType, &target, &enabled, &bodyPattern, &jsonPath, &jsonExpect)
 		if err == sql.ErrNoRows {
 			writeError(w, http.StatusConflict, "no active monitor configured for this service")
 			return
@@ -1258,6 +1259,9 @@ func handlePostServiceCheck(db *sql.DB, scheduler *monitorScheduler) http.Handle
 			serviceName: name,
 			monitorType: monitorType,
 			target:      target,
+			BodyPattern: nullStringPtr(bodyPattern),
+			JSONPath:    nullStringPtr(jsonPath),
+			JSONExpect:  nullStringPtr(jsonExpect),
 		})
 		// 202: the probe is queued, and its result arrives over the normal
 		// status_update / heartbeat broadcast once the worker runs it.

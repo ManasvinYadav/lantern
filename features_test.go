@@ -303,8 +303,11 @@ func TestConfigRoundTripRestoresServices(t *testing.T) {
 	body, _ := json.Marshal(export)
 
 	dst := newTestDB(t)
-	cfg := &Config{}
-	scheduler := newMonitorScheduler(dst, newMonitorPool(dst, cfg, newWebhookDispatcher(dst, 1), newWSHub(), 1))
+	// newTestScheduler avoids newMonitorPool's live worker goroutines: this
+	// import enables an "http" monitor whose target is a real URL, and a real
+	// worker would probe it over the network for the rest of the test binary's
+	// life, racing on the package-level cert threshold vars other tests mutate.
+	scheduler := newTestScheduler(dst)
 	rec := httptest.NewRecorder()
 	handleConfigImport(dst, scheduler)(rec, httptest.NewRequest(http.MethodPost, "/api/config/import", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -329,8 +332,11 @@ func TestConfigRoundTripRestoresServices(t *testing.T) {
 
 func TestImportSkipsBadEntriesWithoutDiscardingGoodOnes(t *testing.T) {
 	db := newTestDB(t)
-	cfg := &Config{}
-	scheduler := newMonitorScheduler(db, newMonitorPool(db, cfg, newWebhookDispatcher(db, 1), newWSHub(), 1))
+	// newTestScheduler avoids newMonitorPool's live worker goroutines: this
+	// import enables a "tcp" monitor, and a real worker would call certStatusFor
+	// for the rest of the test binary's life, racing on the package-level cert
+	// threshold vars that other tests mutate.
+	scheduler := newTestScheduler(db)
 
 	payload := `{"services":[
       {"name":"good","group":"core","monitor":{"type":"tcp","target":"db:5432","interval_seconds":60,"enabled":true}},

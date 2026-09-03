@@ -2963,13 +2963,20 @@
       const typeEl = document.getElementById('monitorType');
       const targetEl = document.getElementById('monitorTarget');
       const ivEl = document.getElementById('monitorInterval');
+      const bodyPatternEl = document.getElementById('monitorBodyPattern');
       if (!nameEl || !typeEl || !targetEl || !ivEl) return {};
       const iv = parseInt(ivEl.value, 10);
+      let bodyPatternErr = '';
+      const bodyPattern = ((bodyPatternEl && bodyPatternEl.value) || '').trim();
+      if (bodyPattern) {
+        try { new RegExp(bodyPattern); } catch (err) { bodyPatternErr = 'Must be a valid regular expression'; }
+      }
       return {
         monitorServiceName: (nameEl.value || '').trim() ? '' : 'Service name is required',
         monitorTarget: validateMonitorTarget(typeEl.value, (targetEl.value || '').trim()),
         monitorInterval: (isFinite(iv) && iv >= 10 && iv <= 3600)
-          ? '' : 'Interval must be between 10 and 3600 seconds'
+          ? '' : 'Interval must be between 10 and 3600 seconds',
+        monitorBodyPattern: bodyPatternErr
       };
     }
 
@@ -2988,7 +2995,7 @@
     }
 
     function resetMonitorValidation() {
-      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval'].forEach(id => {
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval', 'monitorBodyPattern', 'monitorJsonPath', 'monitorJsonExpect'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         delete el.dataset.touched;
@@ -3019,7 +3026,7 @@
         el.addEventListener('change', () => { el.dataset.touched = '1'; refresh(); });
         el.addEventListener('blur', () => { el.dataset.touched = '1'; refresh(); });
       };
-      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval']
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval', 'monitorBodyPattern', 'monitorJsonPath', 'monitorJsonExpect']
         .forEach(id => wire(id, refreshMonitorValidity));
       ['wh-discord', 'wh-telegram', 'wh-gotify', 'wh-generic']
         .forEach(id => wire(id, refreshWebhookValidity));
@@ -4473,6 +4480,9 @@
         const btnSaveMonitor = document.getElementById('btnSaveMonitor');
         if (btnSaveMonitor) btnSaveMonitor.addEventListener('click', saveActiveMonitor);
 
+        const monitorTypeEl = document.getElementById('monitorType');
+        if (monitorTypeEl) monitorTypeEl.addEventListener('change', updateMonitorHttpFieldsVisibility);
+
         const btnBackupDb = document.getElementById('btnBackupDb');
         if (btnBackupDb) {
           btnBackupDb.addEventListener('click', () => {
@@ -4656,6 +4666,9 @@
       const typeEl = document.getElementById('monitorType');
       const intervalEl = document.getElementById('monitorInterval');
       const targetEl = document.getElementById('monitorTarget');
+      const bodyPatternEl = document.getElementById('monitorBodyPattern');
+      const jsonPathEl = document.getElementById('monitorJsonPath');
+      const jsonExpectEl = document.getElementById('monitorJsonExpect');
       if (!nameEl) return;
 
       nameEl.value = serviceName || '';
@@ -4663,6 +4676,9 @@
       typeEl.value = 'http';
       intervalEl.value = '60';
       targetEl.value = '';
+      if (bodyPatternEl) bodyPatternEl.value = '';
+      if (jsonPathEl) jsonPathEl.value = '';
+      if (jsonExpectEl) jsonExpectEl.value = '';
       setToggle(document.getElementById('monitorEnabled'), true);
       resetMonitorValidation();
       if (title) title.innerText = serviceName ? ('Monitor — ' + serviceName) : 'Add Monitor';
@@ -4678,13 +4694,26 @@
               typeEl.value = m.monitor_type;
               intervalEl.value = m.interval_seconds || 60;
               targetEl.value = m.target || '';
+              if (bodyPatternEl) bodyPatternEl.value = m.body_pattern || '';
+              if (jsonPathEl) jsonPathEl.value = m.json_path || '';
+              if (jsonExpectEl) jsonExpectEl.value = m.json_expect || '';
               setToggle(document.getElementById('monitorEnabled'), m.enabled !== false);
             }
           }
         } catch (err) { /* leave the blank form up */ }
       }
+      updateMonitorHttpFieldsVisibility();
       refreshMonitorValidity();
       openOverlay('monitorModalOverlay');
+    }
+
+    // The body-pattern/JSON checks only apply to HTTP(S) monitors; hide them
+    // for tcp/ping so the form doesn't imply a check that will never run.
+    function updateMonitorHttpFieldsVisibility() {
+      const typeEl = document.getElementById('monitorType');
+      const group = document.getElementById('monitorHttpFields');
+      if (!typeEl || !group) return;
+      group.hidden = typeEl.value !== 'http';
     }
 
     async function saveActiveMonitor() {
@@ -4694,9 +4723,12 @@
       const monitor_type = document.getElementById('monitorType').value;
       const target = (document.getElementById('monitorTarget').value || '').trim();
       const interval_seconds = parseInt(document.getElementById('monitorInterval').value, 10) || 60;
+      const body_pattern = (document.getElementById('monitorBodyPattern').value || '').trim();
+      const json_path = (document.getElementById('monitorJsonPath').value || '').trim();
+      const json_expect = (document.getElementById('monitorJsonExpect').value || '').trim();
 
       // Surface every problem at once rather than one toast at a time.
-      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval'].forEach(id => {
+      ['monitorServiceName', 'monitorType', 'monitorTarget', 'monitorInterval', 'monitorBodyPattern', 'monitorJsonPath', 'monitorJsonExpect'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.dataset.touched = '1';
       });
@@ -4708,7 +4740,7 @@
         const res = await authFetch(API.serviceMonitor(name), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: enabled })
+          body: JSON.stringify({ monitor_type, target, interval_seconds, enabled: enabled, body_pattern, json_path, json_expect })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save monitor');
@@ -6253,6 +6285,24 @@
         <div class="form-group">
           <div class="form-label"><span>Target</span></div>
           <input type="text" class="form-input" id="monitorTarget" placeholder="http://host:port/path, or host:port, or host" autocomplete="off" />
+        </div>
+
+        <div id="monitorHttpFields" style="display:flex; flex-direction:column; gap:var(--space-5);">
+          <div class="form-group">
+            <div class="form-label"><span>Body must match (regex, optional)</span></div>
+            <input type="text" class="form-input" id="monitorBodyPattern" placeholder="e.g. &quot;status&quot;:\s*&quot;ok&quot;" autocomplete="off" />
+          </div>
+
+          <div style="display:flex; gap:12px;">
+            <div class="form-group" style="flex:1;">
+              <div class="form-label"><span>JSON path (optional)</span></div>
+              <input type="text" class="form-input" id="monitorJsonPath" placeholder="e.g. status" autocomplete="off" />
+            </div>
+            <div class="form-group" style="flex:1;">
+              <div class="form-label"><span>Expected value</span></div>
+              <input type="text" class="form-input" id="monitorJsonExpect" placeholder="e.g. healthy" autocomplete="off" />
+            </div>
+          </div>
         </div>
 
         <div class="toggle-row" style="padding-top:4px;">

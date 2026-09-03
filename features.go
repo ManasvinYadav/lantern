@@ -519,8 +519,21 @@ ON CONFLICT(service_name) DO UPDATE SET
 						applied["monitors"]++
 						// Reflect the change in the running scheduler, or the
 						// import would not take effect until the next restart.
+						//
+						// ConfigMonitor doesn't carry body_pattern/json_path/json_expect
+						// (like cert_expiry_at, they're derived/runtime config, not
+						// portable service config), so the INSERT above leaves them
+						// untouched. Read them back rather than passing nil here, or
+						// a service that already had one configured would have it
+						// silently stop applying in the running scheduler — the DB
+						// row would still show it configured, but checks wouldn't
+						// enforce it again until the next process restart.
 						if m.Enabled {
-							scheduler.start(name, mtype, strings.TrimSpace(m.Target), interval)
+							var bodyPattern, jsonPath, jsonExpect sql.NullString
+							_ = db.QueryRow(`SELECT body_pattern, json_path, json_expect FROM active_monitors WHERE service_name = ?`, name).
+								Scan(&bodyPattern, &jsonPath, &jsonExpect)
+							scheduler.start(name, mtype, strings.TrimSpace(m.Target), interval,
+								nullStringPtr(bodyPattern), nullStringPtr(jsonPath), nullStringPtr(jsonExpect))
 						} else {
 							scheduler.stop(name)
 						}
