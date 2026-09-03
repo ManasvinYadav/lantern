@@ -83,7 +83,7 @@ services:
       - socket-proxy
 
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.62.3
+    image: ghcr.io/manasvinyadav/lantern:v0.70.0
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -163,15 +163,60 @@ To secure the write and administrative endpoints, set one of the following:
 
 | Variable | Description |
 |---|---|
-| `LANTERN_AUTH_TOKEN` | Admin bearer token. Passed via `Authorization: Bearer <TOKEN>`. Highly recommended for API clients pushing status. |
-| `LANTERN_AUTH_USER` | Admin username. Seeds the credential store on first boot; also accepted as HTTP Basic Auth. |
-| `LANTERN_AUTH_PASS` | Admin password. Used in conjunction with `LANTERN_AUTH_USER`. |
+| `LANTERN_AUTH_TOKEN` | Installation-wide bearer token. Passed via `Authorization: Bearer <TOKEN>`. Highly recommended for API clients pushing status. Authenticates as **admin**, never owner — see [Users & roles](#users--roles). |
+| `LANTERN_AUTH_USER` | Username for the first account. Seeds the store on first boot; also accepted as HTTP Basic Auth. |
+| `LANTERN_AUTH_PASS` | Password for it. Used in conjunction with `LANTERN_AUTH_USER`. |
+
+### Users & roles
+
+Every account has one of three roles:
+
+| | viewer | admin | owner |
+|---|---|---|---|
+| Read the dashboard, history, incidents, badges | ✅ | ✅ | ✅ |
+| Push status, trigger checks, toggle maintenance | | ✅ | ✅ |
+| Services, monitors, groups, alert routes, branding, quiet hours, announcements | | ✅ | ✅ |
+| Backup, webhook URLs, config export/import, audit log | | ✅ | ✅ |
+| Create, disable, re-role and remove accounts | | | ✅ |
+
+Roles are coarse deliberately. Per-service access for a *person* is not something Lantern
+needs; per-service access for a *machine* already exists as
+[scoped API tokens](#scoped-api-tokens-at-rest), which are a separate axis and are
+unaffected by roles.
+
+A **viewer** is read-only, and is additionally refused on the routes that carry
+installation-wide secrets: `GET /api/backup` would hand them every password hash,
+`GET /api/webhooks` every webhook URL, `GET /api/config/export` the whole configuration,
+and `GET /api/admin/audit-log` every action anyone has taken. Those are refused with `403`
+rather than served.
+
+The gate lives in the auth middleware and runs before any handler. The dashboard hides
+controls a role cannot use, but that is a courtesy — an API call bypassing the UI is
+refused just the same. Roles are read from the database on every request rather than
+stamped onto the session, so **demoting or disabling someone takes effect on their very
+next request**, not at their next sign-in.
+
+Two things Lantern will not let you do, because both strand the install with no way back
+short of editing the database by hand:
+
+- delete, disable, or demote the **last enabled owner** (`409`)
+- delete the account **you are signed in as** (`409`)
+
+Manage accounts at **Settings → Users**, which appears only for an owner, or through
+[`/api/admin/users`](API.md). Account management is refused outright on an install with no
+credentials at all: such an install is open by design, so without that guard anyone
+reaching the port could POST themselves an owner.
+
+**Upgrading from before v0.70:** nothing to do. The single operator in the old
+`admin_credentials` row becomes the owner automatically on first boot, password digest
+carried across rather than re-hashed, so the same credentials keep working. The legacy
+table is left in place so a downgrade still finds what it expects.
 
 ### Signing in
 
-Admin credentials live in the database, not in the environment. Set
+Credentials live in the database, not in the environment. Set
 `LANTERN_AUTH_USER` and `LANTERN_AUTH_PASS` and Lantern hashes them with
-bcrypt into `admin_credentials` **on first boot only** — after that the stored
+bcrypt into the `users` table as the owner **on first boot only** — after that the stored
 row is authoritative, so a password you change in the dashboard is not
 reverted by a stale environment variable on the next restart. You can also
 skip the environment entirely and set credentials from **Settings → Account &
@@ -184,11 +229,13 @@ browser's `WebSocket` constructor cannot send an `Authorization` header, so
 header-based auth alone leaves the dashboard falling back to polling. Failed
 logins are rate limited per client address.
 
-Change your username or password at **Settings → Account & Security**. The
+Change **your own** username or password at **Settings → Account & Security**. The
 current password is required and verified; a wrong one returns `401`. A
-successful change revokes every session and issues a fresh one to the browser
-that made the change, so other devices are signed out and yours is not. New
-passwords must be at least 8 characters.
+successful change revokes your other sessions and issues a fresh one to the browser
+that made the change, so your other devices are signed out and this one is not — nobody
+else's session is affected. New passwords must be at least 8 characters. An owner resets
+*someone else's* password from **Settings → Users** instead, which also ends that
+account's sessions.
 
 If `LANTERN_AUTH_TOKEN` is set, turning sign-in on for the first time requires
 that token. Setup mode issues an admin session to a caller who has proved
@@ -197,8 +244,9 @@ a token-configured deployment it would be a privilege escalation.
 
 ### What each mode gates
 
-With **admin credentials set**, everything requires a session except the
-always-open surface below.
+With **accounts set up**, everything requires a session except the always-open
+surface below, and what a session may then do depends on its
+[role](#users--roles).
 
 With **`LANTERN_AUTH_TOKEN` alone**, only mutating and administrative routes
 require the token. Those are:
@@ -207,6 +255,9 @@ require the token. Those are:
 - `GET`, `PUT` and `POST /api/webhooks`, and `POST /api/webhooks/test`
 - `GET /api/backup`
 - `PUT /api/auth/credentials`
+- `GET` and `PUT /api/branding` and `/api/notifications/schedule`
+- every `/api/admin/*` route (the audit log; account management is refused to
+  this credential outright)
 - every `/api/services/{name}/docker/*` route, including its two `GET`
   endpoints, since they expose container internals and log content
 - non-`GET` writes to any `/group`, `/maintenance` or `/monitor` path
@@ -228,8 +279,17 @@ an existing deployment out of itself.
 
 Per-service scoped tokens (issued into the `api_tokens` table) can push status
 and use Docker controls for their own service name only, and are rejected with
-`403` if used against a different service. Both token types keep working under
-the login gate, so existing scripts, automations and CI need no changes.
+`403` if used against a different service. They are also refused outright on the
+routes that reach past a single service: the backup, webhook URLs, config
+export/import, the audit log, account management, and the installation-wide
+branding and quiet-hours settings. Both token types keep working under the login
+gate, so existing scripts, automations and CI need no changes.
+
+> Before v0.63.1 that second restriction did not exist. A token issued for one
+> service could authenticate against `GET /api/backup` and download a full
+> database snapshot — the credential hash, every session hash, and every other
+> service's token. If you ran an earlier version and have issued scoped tokens,
+> rotate them.
 
 ### Always open
 
@@ -240,6 +300,7 @@ Reachable without any credential, regardless of configuration:
 - `GET /api/public/groups`
 - `GET /api/public/services/{name}/uptime`
 - `GET /api/public/ws`
+- `GET /api/public/banner` and `GET /api/public/branding`
 - `GET` and `HEAD /api/badge/{service}.svg`
 - `GET /metrics`
 - `GET /api/health`
@@ -409,6 +470,88 @@ a time: posting a new one dismisses whatever was showing, which matches how this
 is actually used — the current situation replaces the previous one rather than
 stacking on it. Dismissal records a timestamp rather than deleting the row, so
 what was announced and when survives for reconstructing an incident afterwards.
+
+## Notification quiet hours
+
+A single installation-wide window during which alerts either go quiet or get
+batched. Configure it at **Settings → Alerts & Webhooks → Quiet Hours**, or
+through [`GET|PUT /api/notifications/schedule`](API.md).
+
+- **Mute** — notifications inside the window are dropped, the same way
+  per-service maintenance mode already works, but time-scheduled and global
+  rather than manual and per-service.
+- **Digest** — notifications inside the window are queued instead of dropped,
+  then sent as one combined message per channel as soon as the window closes,
+  respecting each service's existing [alert routing](#per-service-alert-routing).
+  A background flusher checks every minute.
+
+Times are minutes past midnight **UTC**, 0–1439. A window may wrap past
+midnight (22:00–08:00 is `start_minute: 1320`, `end_minute: 480`). A window
+whose start equals its end is never active, as is a disabled one.
+
+This sits alongside per-service maintenance mode, not instead of it: both are
+independent suppression paths into the same dispatch. A service in maintenance
+stays silent whatever the schedule says.
+
+Switching mode, or turning quiet hours off, never strands queued events — the
+flusher drains the queue when the window closes regardless of what the mode is
+by then.
+
+## Status page branding
+
+Override the name, logo and default accent shown in the header of both the
+dashboard and the public status page — they are one HTML page, so both follow.
+**Settings → General → Branding**, or
+[`GET|PUT /api/branding`](API.md#getput-apibranding).
+
+- **Name** replaces "Lantern" in the header and the browser tab title.
+- **Logo URL** must be an `http(s)` URL with a host. A `javascript:` or `data:`
+  URI is refused: the value ends up in an `<img src>`. The Content-Security-Policy
+  is widened by exactly that one origin and nothing else, so an
+  externally-hosted logo loads without opening the page to every image host.
+- **Default accent** applies only to visitors who have not picked their own
+  accent. A personal choice always wins.
+
+Writes are admin-level; a scoped API token is refused, since branding is
+installation-wide. Reads are anonymous on `/api/public/branding`, which is what
+the public status page uses.
+
+Custom domains are deliberately *not* application state — see
+[Custom Domains](CUSTOM_DOMAIN.md).
+
+## Audit log
+
+A persisted record of administrative actions, at **Diagnostics → Audit Log** or
+[`GET /api/admin/audit-log`](API.md). Each entry records who, what, the target,
+success or failure, the source IP, and when.
+
+Covered: logins (success **and** failure), credential changes, account create /
+update / delete, service deletion, group, alert-route and monitor edits,
+maintenance toggles, webhook channel changes (channel *names* only, never the
+URLs), branding and quiet-hours changes, config imports, and Docker container
+restarts.
+
+The actor is the signed-in username, `token:<service>` for a scoped API token,
+or `admin` for the `LANTERN_AUTH_TOKEN` bearer credential, which names no
+account. Behind a reverse proxy the IP is the proxy's — see
+[Custom Domains](CUSTOM_DOMAIN.md).
+
+Entries outlive whatever they name: deleting a service does not erase the record
+that it was deleted. The log is readable by admins and owners, and refused to
+viewers.
+
+## Service groups
+
+Assign a service to a group from its detail drawer, or with
+`PUT /api/services/{name}/group`. Groups drive the dashboard's grouped view and
+its filters.
+
+Each group header carries a rollup of what is underneath it, on the same
+worst-status-wins ranking the rest of the dashboard uses
+(`down` > `degraded` > `up` > `unknown`), so a collapsed group still shows that
+something inside it is wrong. Maintenance is surfaced on the header only when
+nothing under it is down or degraded — a paused check must never mask a real
+outage.
 
 ## Configuration export and import
 

@@ -64,7 +64,7 @@ Everything stored in the database:
 - maintenance state and maintenance windows
 - saved webhook URLs and the webhook delivery history
 - active monitor configurations, including captured TLS certificate expiry dates
-- the admin credential row and any per-service API tokens
+- every account (username, bcrypt password hash, role) and any per-service API tokens
 
 ## What's not included
 

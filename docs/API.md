@@ -35,16 +35,21 @@ curl -s http://localhost:7654/api/auth/session
 ```json
 {
   "auth_required": true,
-  "authenticated": false,
+  "authenticated": true,
+  "username": "boss",
+  "role": "owner",
   "token_mode": false,
   "can_setup": false
 }
 ```
 
-- `auth_required` — admin credentials exist, so the login gate is active.
+- `auth_required` — at least one enabled account exists, so the login gate is active.
+- `role` — `owner`, `admin` or `viewer`; present only when authenticated. The dashboard
+  uses it to hide controls the caller cannot use. It is a convenience, never the gate —
+  that is enforced in the auth middleware before any handler runs.
 - `token_mode` — only `LANTERN_AUTH_TOKEN` is configured; there is no password to type and
   no login wall is shown.
-- `can_setup` — no credentials exist yet, so first-time setup is offered.
+- `can_setup` — no accounts exist yet, so first-time setup is offered.
 
 ### `POST /api/auth/login`
 Exchanges a username and password for an `HttpOnly`, `SameSite=Strict` session cookie.
@@ -61,12 +66,16 @@ curl -sc cookies.txt -X POST http://localhost:7654/api/auth/login \
 Revokes the current session and clears the cookie.
 
 ### `PUT /api/auth/credentials`
-Changes the admin username and/or password. Requires auth.
+Changes **your own** username and/or password. Requires a signed-in session — not merely a
+credential. A caller holding only `LANTERN_AUTH_TOKEN` has no account to change; managing
+accounts is `/api/admin/users`, and letting a machine credential rewrite a person's
+password is exactly what that route refuses.
 
-`current_password` is required and verified whenever credentials already exist, so a
-borrowed session cannot silently change the password. A successful change revokes **every**
-session and issues a fresh one to the calling browser — other devices are signed out, yours
-is not. New passwords must be at least 8 characters.
+`current_password` is required and verified whenever accounts already exist, so a borrowed
+session cannot silently change the password. A successful change revokes **your** sessions
+and issues a fresh one to the calling browser — your other devices are signed out, yours is
+not, and nobody else's session is touched. New passwords must be at least 8 characters.
+Renaming carries your sessions with you.
 
 ```bash
 curl -b cookies.txt -X PUT http://localhost:7654/api/auth/credentials \
@@ -74,9 +83,50 @@ curl -b cookies.txt -X PUT http://localhost:7654/api/auth/credentials \
   -d '{"current_password": "old-password", "new_password": "new-password"}'
 ```
 
-When no credentials exist at all, this performs first-time setup without a current
-password — it is how you turn sign-in on from a dashboard that is currently open. If
-`LANTERN_AUTH_TOKEN` is set, that setup path additionally requires the token.
+When no accounts exist at all, this performs first-time setup without a current password,
+creating the **owner** — it is how you turn sign-in on from a dashboard that is currently
+open. If `LANTERN_AUTH_TOKEN` is set, that setup path additionally requires the token.
+
+### `GET|POST /api/admin/users`, `PUT|DELETE /api/admin/users/{username}`
+
+Account management. **Owner-only**, and refused entirely on an install with no credentials
+— such an install is wide open by design, so without that guard any passer-by could POST
+themselves an owner and lock the real operator out. Scoped API tokens and the
+`LANTERN_AUTH_TOKEN` bearer credential are both refused here too.
+
+```bash
+# List
+curl -b cookies.txt http://localhost:7654/api/admin/users
+
+# Create
+curl -b cookies.txt -X POST http://localhost:7654/api/admin/users \
+  -H "Content-Type: application/json" \
+  -d '{"username": "looker", "password": "at-least-8-chars", "role": "viewer"}'
+
+# Change role, disable, or reset a password — omitted fields are left alone
+curl -b cookies.txt -X PUT http://localhost:7654/api/admin/users/looker \
+  -H "Content-Type: application/json" -d '{"role": "admin"}'
+
+# Remove
+curl -b cookies.txt -X DELETE http://localhost:7654/api/admin/users/looker
+```
+
+```json
+[
+  { "username": "boss",   "role": "owner",  "disabled": false, "created_at": 1788461191, "updated_at": 1788461191 },
+  { "username": "looker", "role": "viewer", "disabled": false, "created_at": 1788461191, "updated_at": 1788461191 }
+]
+```
+
+Roles are `owner`, `admin` and `viewer` — see
+[Users & roles](CONFIG.md#users--roles) for what each may do. Usernames are unique
+case-insensitively and at most 64 characters; passwords at least 8.
+
+`409` is returned when a change would strand the install: the last enabled owner cannot be
+deleted, disabled or demoted, and you cannot delete the account you are signed in as.
+Deleting or disabling an account, or resetting its password, ends that account's sessions
+immediately. Every one of these actions is recorded in the audit log under the acting
+username.
 
 ---
 
@@ -499,9 +549,11 @@ Admin-only; scoped tokens get `403`.
 ]
 ```
 
-`actor` is `admin` for a session, Basic Auth or the admin bearer token, and
-`token:<service>` for a per-service scoped token. Entries survive the deletion of
-whatever they name — removing a service does not erase the record that it happened.
+`actor` is the signed-in username, `token:<service>` for a per-service scoped token, or
+`admin` for the `LANTERN_AUTH_TOKEN` bearer credential, which names no account. Entries
+survive the deletion of whatever they name — removing a service, or the account that did
+it, does not erase the record that it happened. Readable by admins and owners; a viewer
+gets `403`.
 
 ---
 
