@@ -459,6 +459,17 @@ func authMiddleware(db *sql.DB, cfg *Config, next http.Handler) http.Handler {
 			}
 
 			if serviceName, ok := lookupScopedToken(db, token); ok {
+				// A token scoped to one service authenticates successfully
+				// here, but must not be allowed to pass as a credential on
+				// routes that reach every service or the admin account
+				// itself (backup, webhook URLs, config export/import, the
+				// audit log). Without this, a token minted for "webapp"
+				// could download the full database snapshot — credential
+				// hash, session hashes, and every other service's token.
+				if isAdminOnlyEndpoint(r) {
+					writeError(w, http.StatusForbidden, "token not permitted for this endpoint")
+					return
+				}
 				ctx := context.WithValue(r.Context(), scopedServiceKey, serviceName)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

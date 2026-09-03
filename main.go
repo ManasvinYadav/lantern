@@ -440,6 +440,37 @@ func isProtectedEndpoint(r *http.Request) bool {
 	// it sits behind the token whenever one is configured.
 	case strings.HasPrefix(path, "/api/services/") && method == http.MethodDelete:
 		return true
+	// The admin action audit log: who logged in, changed credentials,
+	// deleted a service, edited a monitor, and so on. As sensitive a read as
+	// /api/backup for the same reason — it names every admin action taken.
+	case strings.HasPrefix(path, "/api/admin/"):
+		return true
+	}
+	return false
+}
+
+// isAdminOnlyEndpoint reports whether a request must be authenticated as a
+// full admin — a session, Basic Auth, or the admin-wide bearer token — even
+// though isProtectedEndpoint would also let a per-service scoped API token
+// through. These routes reach beyond the one service a scoped token is
+// meant to speak for: they read or rewrite the admin credential, every
+// webhook URL, a full database snapshot, the whole installation's config,
+// or the admin action audit trail. A token scoped to service A must never
+// authenticate against any of them, so authMiddleware checks this before
+// honoring a scoped token's Bearer credential.
+func isAdminOnlyEndpoint(r *http.Request) bool {
+	path := r.URL.Path
+	switch {
+	case path == "/api/auth/credentials":
+		return true
+	case path == "/api/backup":
+		return true
+	case path == "/api/webhooks", path == "/api/webhooks/test":
+		return true
+	case strings.HasPrefix(path, "/api/config/"):
+		return true
+	case strings.HasPrefix(path, "/api/admin/"):
+		return true
 	}
 	return false
 }

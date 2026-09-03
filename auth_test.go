@@ -692,6 +692,57 @@ func TestTokenModeStillAllowsTheAdminToken(t *testing.T) {
 	}
 }
 
+// TestScopedApiTokenCannotReachAdminOnlyEndpoints closes a privilege
+// escalation: a token minted for one service authenticated successfully via
+// Bearer on every route, including ones that reach far past that one
+// service — a full database snapshot with every credential hash and every
+// other service's token, all webhook URLs, and the whole installation's
+// config export/import. isAdminOnlyEndpoint plus the check in authMiddleware
+// is what's supposed to stop that; this is the regression test for it.
+func TestScopedApiTokenCannotReachAdminOnlyEndpoints(t *testing.T) {
+	db, cfg := newAuthDB(t, "admin", "correct-horse")
+	cfg.AuthToken = "a-long-admin-token"
+	if _, err := db.Exec(`INSERT INTO api_tokens (token, service_name) VALUES (?, ?)`,
+		"scoped-token", "webapp"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/backup"},
+		{http.MethodGet, "/api/webhooks"},
+		{http.MethodPut, "/api/webhooks"},
+		{http.MethodPost, "/api/webhooks/test"},
+		{http.MethodGet, "/api/config/export"},
+		{http.MethodPost, "/api/config/import"},
+		{http.MethodPut, "/api/auth/credentials"},
+		{http.MethodGet, "/api/admin/audit-log"},
+	}
+	for _, p := range paths {
+		req := httptest.NewRequest(p.method, p.path, nil)
+		req.Header.Set("Authorization", "Bearer scoped-token")
+		rec := httptest.NewRecorder()
+		authMiddleware(db, cfg, okHandler()).ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s with a scoped token = %d, want 403", p.method, p.path, rec.Code)
+		}
+	}
+
+	// The admin-wide token must still work on all of them — this is a
+	// scoping fix, not a new gate on legitimate admin access.
+	for _, p := range paths {
+		req := httptest.NewRequest(p.method, p.path, nil)
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		rec := httptest.NewRecorder()
+		authMiddleware(db, cfg, okHandler()).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s %s with the admin token = %d, want 200", p.method, p.path, rec.Code)
+		}
+	}
+}
+
 // The setup path exists so an open dashboard can turn auth on from the UI.
 // With a token configured the dashboard is not open, so setup there would be a
 // privilege escalation even if the middleware ever let the request through.
