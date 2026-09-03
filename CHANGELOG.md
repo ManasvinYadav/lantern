@@ -9,6 +9,24 @@ good idea.
 
 ---
 
+## v0.63.1 — Scoped API tokens could authenticate against admin-only routes
+
+### Fixed
+
+- **Privilege escalation via scoped API tokens (High).** A token issued to
+  one service authenticated successfully as a Bearer credential on *every*
+  route the auth middleware saw — including `GET /api/backup` (a full
+  database snapshot containing the admin credential hash, every session
+  hash, and every other service's API token), `/api/webhooks`
+  (Discord/Telegram webhook URLs), `/api/config/export` and
+  `/api/config/import` (the whole installation's configuration), and
+  `PUT /api/auth/credentials`. Earlier scoped-token checks (v0.62.4) only
+  stopped a token from acting on a service other than its own; nothing
+  stopped it from acting as a full admin. `isAdminOnlyEndpoint` now
+  enumerates these routes and `authMiddleware` rejects a scoped token
+  against them with 403 before it ever reaches the handler. The admin-wide
+  bearer token, session cookie, and Basic Auth paths are unaffected.
+
 ## v0.63.0 — Service-group status rollup
 
 ### Added
