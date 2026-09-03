@@ -88,8 +88,12 @@ It uses a `modernc.org/sqlite` backend (no CGO required, cross-compiles easily) 
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/container-stats.png" alt="Service drawer with container stats and uptime graph" width="400"/></td>
-    <td><img src="docs/screenshots/diagnostics.png" alt="Diagnostics drawer activity log" width="400"/></td>
+    <td><img src="docs/screenshots/service-detail.png" alt="Service drawer: latency stats, check history, 7-day uptime graph and recent incidents" width="400"/></td>
+    <td><img src="docs/screenshots/diagnostics.png" alt="Diagnostics drawer: cross-service activity log" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/users.png" alt="Settings: accounts with owner, admin and viewer roles" width="400"/></td>
+    <td><img src="docs/screenshots/audit-log.png" alt="Diagnostics drawer: admin action audit log" width="400"/></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/login.png" alt="Sign-in gate" width="400"/></td>

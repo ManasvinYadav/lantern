@@ -369,15 +369,19 @@
       transition: background-color 0.2s, border-color 0.2s, color 0.2s,
                   transform 0.2s, box-shadow 0.2s;
     }
-    .btn:hover { background: var(--panel-hover); border-color: var(--border-focus); }
-    .btn:active { transform: scale(0.97); }
+    .btn:hover:not(:disabled) { background: var(--panel-hover); border-color: var(--border-focus); }
+    .btn:active:not(:disabled) { transform: scale(0.97); }
+    /* Every other control in here dims when disabled — .palette-action,
+       .card-menu-item, .toggle, .form-input. .btn did not, so a button the
+       app had deliberately turned off looked exactly like one that worked. */
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     
     .btn.primary {
       background: var(--accent) !important;
       border-color: var(--accent) !important;
       color: var(--on-accent) !important;
     }
-    .btn.primary:hover {
+    .btn.primary:hover:not(:disabled) {
       filter: brightness(1.1);
       box-shadow: 0 0 14px var(--accent-glow) !important;
     }
@@ -2494,8 +2498,9 @@
 
         <div id="auditLogPanel" style="display:none;">
           <div style="font-size:11px; color:var(--text-muted); margin-bottom:12px;">
-            Admin actions: logins, credential changes, service and monitor edits, maintenance toggles,
-            config imports, and Docker restarts.
+            Admin actions: logins (success and failure), account and credential changes, service,
+            group, monitor and alert-route edits, maintenance toggles, branding and quiet-hours
+            changes, webhook channel changes, config imports, and Docker restarts.
           </div>
           <div class="diag-run-list" id="auditLogList">
             <!-- JS -->
@@ -5405,7 +5410,6 @@
         apiHealthy = false;
         updateConnectionBanner();
       } finally {
-        if (pulse) pulse.classList.add('loading');
         const lastUp = document.getElementById('lastUpdated');
         if (lastUp) lastUp.innerText = new Date().toLocaleTimeString();
       }
