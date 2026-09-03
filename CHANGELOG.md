@@ -9,6 +9,36 @@ good idea.
 
 ---
 
+## v0.62.4 — Monitor response validation, and a scoped-token gap closed
+
+### Added
+
+- **Regex and JSON-path validation for HTTP monitors.** An active HTTP
+  monitor can now optionally require the response body to match a regex
+  (`body_pattern`), and/or a JSON field to equal an expected value
+  (`json_path`/`json_expect`), on top of the existing status-code check. All
+  configured checks must pass for "up"; the first one that fails determines
+  the "down" message. Configurable from the monitor's edit form in the
+  dashboard. `body_pattern` is validated as a real regex when saved (400 on
+  a bad pattern), and its compiled form is cached rather than recompiled on
+  every check.
+
+### Fixed
+
+- **Scoped API tokens could hijack another service's monitor.** A token
+  issued to one service could `PUT`/`DELETE` any other service's active
+  monitor config — forging its status, redirecting its target, or deleting
+  it outright. The monitor endpoints now enforce the same scoped-token check
+  already used by the alert-routing and group endpoints.
+- **Config export issued 4 queries per exported service** instead of
+  batching them, and two of the four silently discarded database errors
+  under lock contention (a real service could export with an empty
+  group/maintenance state and no indication anything went wrong). Both the
+  export and import paths now propagate query errors instead of swallowing
+  them.
+
+---
+
 ## v0.62.3 — DOCKER_HOST support for socket proxies (closes #2)
 
 Users running a **socket proxy** (such as
