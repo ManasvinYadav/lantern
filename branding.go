@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,29 @@ type statusPageBranding struct {
 	Title       string `json:"title,omitempty"`
 	LogoURL     string `json:"logo_url,omitempty"`
 	AccentColor string `json:"accent_color,omitempty"`
+}
+
+// logoOrigin caches the scheme://host of the configured logo, so
+// securityHeadersMiddleware can widen img-src by exactly that one origin and
+// nothing else. The CSP is otherwise "img-src 'self' data:", which would block
+// the very logo the operator just configured. Cached rather than queried per
+// request because every response carries this header, static assets included.
+var logoOrigin atomic.Value // string
+
+func brandingLogoOrigin() string {
+	v, _ := logoOrigin.Load().(string)
+	return v
+}
+
+// setBrandingLogoOrigin records the origin to allow. An unparseable or
+// host-less URL stores "", which leaves the CSP at its default.
+func setBrandingLogoOrigin(raw string) {
+	u, err := url.Parse(raw)
+	if raw == "" || err != nil || u.Host == "" {
+		logoOrigin.Store("")
+		return
+	}
+	logoOrigin.Store(u.Scheme + "://" + u.Host)
 }
 
 func getStatusPageBranding(db *sql.DB) statusPageBranding {
@@ -116,6 +140,7 @@ ON CONFLICT(id) DO UPDATE SET
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		setBrandingLogoOrigin(req.LogoURL)
 		recordAudit(db, r, "branding_change", "", true,
 			"title="+req.Title+" logo_url_set="+boolStr(req.LogoURL != "")+" accent="+req.AccentColor)
 

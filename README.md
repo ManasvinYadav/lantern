@@ -229,6 +229,7 @@ Lantern is highly configurable. Dive into the detailed guides below:
 - 🔌 **[Socket Proxy Setup](docs/CONFIG.md#socket-proxy)**: How to use `DOCKER_HOST` with `docker-socket-proxy` instead of mounting the raw socket.
 - 🔔 **[Webhooks & Notifications](docs/WEBHOOKS.md)**: Setup guides for Discord, Telegram, Gotify, and generic integrations.
 - 💾 **[Backup & Restore](docs/BACKUP.md)**: How to download a consistent database snapshot and restore it.
+- 🌐 **[Custom Domains](docs/CUSTOM_DOMAIN.md)**: Serving the status page on your own hostname, and what changes behind a reverse proxy.
 - 📝 **[Changelog](CHANGELOG.md)**: Release history and patch notes.
 
 ## Quick API Example

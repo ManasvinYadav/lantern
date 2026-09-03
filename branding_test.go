@@ -143,3 +143,57 @@ func TestScopedTokenCannotChangeBranding(t *testing.T) {
 		t.Fatalf("scoped token changed branding to %q", b.Title)
 	}
 }
+
+func TestCSPAllowsExactlyTheConfiguredLogoOrigin(t *testing.T) {
+	// The CSP is "img-src 'self' data:", so without this the branding logo an
+	// operator just configured would be blocked by Lantern's own headers.
+	t.Cleanup(func() { setBrandingLogoOrigin("") })
+
+	probe := func() string {
+		rec := httptest.NewRecorder()
+		securityHeadersMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		return rec.Header().Get("Content-Security-Policy")
+	}
+
+	setBrandingLogoOrigin("")
+	if got := probe(); !strings.Contains(got, "img-src 'self' data:;") {
+		t.Fatalf("default CSP img-src = %q", got)
+	}
+
+	db := newTestDB(t)
+	raw, _ := json.Marshal(map[string]any{"logo_url": "https://cdn.example.com/brand/logo.svg?v=2"})
+	rec := httptest.NewRecorder()
+	handlePutBranding(db)(rec, httptest.NewRequest(http.MethodPut, "/api/branding", bytes.NewReader(raw)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d", rec.Code)
+	}
+	// The path and query must not leak into the CSP — a source expression is
+	// an origin, and "https://cdn.example.com/brand/logo.svg" would be read as
+	// a path-restricted source rather than the host.
+	if got := probe(); !strings.Contains(got, "img-src 'self' data: https://cdn.example.com;") {
+		t.Fatalf("CSP after configuring a logo = %q", got)
+	}
+
+	// Clearing the logo must narrow the CSP back down.
+	raw, _ = json.Marshal(map[string]any{})
+	rec = httptest.NewRecorder()
+	handlePutBranding(db)(rec, httptest.NewRequest(http.MethodPut, "/api/branding", bytes.NewReader(raw)))
+	if got := probe(); !strings.Contains(got, "img-src 'self' data:;") {
+		t.Fatalf("CSP after clearing the logo = %q", got)
+	}
+}
+
+func TestBrandingLogoOriginPrimedFromStoredValue(t *testing.T) {
+	// A restart must not leave a configured logo blocked until the next save.
+	t.Cleanup(func() { setBrandingLogoOrigin("") })
+	db := newTestDB(t)
+	mustExec(t, db, `INSERT INTO status_page_branding (id, logo_url) VALUES (1, ?)
+ON CONFLICT(id) DO UPDATE SET logo_url = excluded.logo_url`, "https://logos.example.org/l.png")
+
+	setBrandingLogoOrigin("")
+	setBrandingLogoOrigin(getStatusPageBranding(db).LogoURL) // what initDB does
+	if got := brandingLogoOrigin(); got != "https://logos.example.org" {
+		t.Fatalf("primed origin = %q", got)
+	}
+}

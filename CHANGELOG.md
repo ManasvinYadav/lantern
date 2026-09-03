@@ -9,6 +9,28 @@ good idea.
 
 ---
 
+## v0.67.1 — Branding logo blocked by our own CSP
+
+### Fixed
+
+- **A branding `logo_url` on another host never loaded.** Settings accepted it
+  and the API stored it, but the response CSP is `img-src 'self' data:`, so the
+  browser refused the image — the feature was only ever going to work for a
+  same-origin logo. `img-src` now also carries the single origin of the
+  configured logo (scheme and host only, not its path), primed at startup and
+  refreshed on every branding change. Nothing else is allowed: a blanket
+  `https:` would have opened every install to every image host to support a
+  setting most installs never touch.
+
+### Added
+
+- **[docs/CUSTOM_DOMAIN.md](docs/CUSTOM_DOMAIN.md)** — serving the status page
+  on your own hostname, with Caddy/nginx/Traefik snippets, how to expose only
+  `/status` on a public hostname, and the four things that change behind a
+  proxy: `X-Forwarded-Proto` is required for `Secure` session cookies, the
+  login throttle and the audit log both see the proxy's address rather than the
+  visitor's, and a `Host`-rewriting proxy needs `LANTERN_WS_ALLOWED_ORIGINS`.
+
 ## v0.67.0 — New brand mark
 
 ### Changed

@@ -457,7 +457,11 @@ clear it. The accent is only a default — a visitor who has picked their own ac
 keeps it. Changes are recorded in the audit log.
 
 Custom domains are a reverse-proxy concern, not application state: point a hostname
-at Lantern and serve `/status` from it.
+at Lantern and serve `/status` from it — see [Custom Domains](CUSTOM_DOMAIN.md).
+
+The CSP is `img-src 'self' data:` plus the origin of the configured `logo_url`,
+and nothing else, so an externally-hosted logo loads without opening the page to
+every image host.
 
 ---
 

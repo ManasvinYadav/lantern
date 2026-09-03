@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.67.0"
+const version = "0.67.1"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -323,6 +323,10 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created
 	if _, err := db.Exec(brandingSchema); err != nil {
 		log.Fatalf("failed to apply branding schema: %v", err)
 	}
+	// Prime the CSP's img-src allowance from the stored logo, so a configured
+	// logo loads on the first request after a restart rather than only after
+	// the next branding save.
+	setBrandingLogoOrigin(getStatusPageBranding(db).LogoURL)
 
 	// Additive column migrations. Each is a no-op on every boot after the
 	// first, so the expected error is "duplicate column name" — see
@@ -541,20 +545,31 @@ var frameAncestors = func() string {
 }()
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
-	csp := "default-src 'self'; " +
-		"script-src 'self' 'unsafe-inline'; " +
-		"style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' data:; " +
-		"connect-src 'self'; " +
-		"base-uri 'self'; " +
-		"form-action 'self'; " +
-		"frame-ancestors " + frameAncestors
+	cspFor := func(imgExtra string) string {
+		img := "img-src 'self' data:"
+		if imgExtra != "" {
+			img += " " + imgExtra
+		}
+		return "default-src 'self'; " +
+			"script-src 'self' 'unsafe-inline'; " +
+			"style-src 'self' 'unsafe-inline'; " +
+			img + "; " +
+			"connect-src 'self'; " +
+			"base-uri 'self'; " +
+			"form-action 'self'; " +
+			"frame-ancestors " + frameAncestors
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		h.Set("Content-Security-Policy", csp)
+		// img-src is 'self' plus, at most, the single origin of a configured
+		// branding logo. Without this the header the operator just configured
+		// would be blocked by our own CSP; with a blanket "https:" instead,
+		// every install would allow every image host to support a feature
+		// most installs never turn on.
+		h.Set("Content-Security-Policy", cspFor(brandingLogoOrigin()))
 		if frameAncestors == "'self'" {
 			// The pre-CSP equivalent, for anything that does not read
 			// frame-ancestors. Omitted when an explicit list is configured,
