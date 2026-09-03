@@ -330,6 +330,145 @@ func TestConfigRoundTripRestoresServices(t *testing.T) {
 	}
 }
 
+// buildConfigExport was rewritten from one query per table per service to one
+// batched query per table (see serviceINClause) to fix a 4N+1 query pattern.
+// The regression risk of that rewrite is attribution: rows for one service
+// ending up on another, or a service with nothing configured in a given
+// table incorrectly inheriting another service's row. Three services, each
+// with a different combination of what's configured, exercise exactly that.
+func TestBuildConfigExportAttributesBatchedFieldsToTheCorrectService(t *testing.T) {
+	db := newTestDB(t)
+	mustExec(t, db, `INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+		"full", "up", "ok", time.Now().UTC().Format(time.RFC3339))
+	mustExec(t, db, `INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+		"bare", "up", "ok", time.Now().UTC().Format(time.RFC3339))
+
+	// "full" has a group, a monitor, an alert route, and maintenance on.
+	mustExec(t, db, `INSERT INTO service_groups (service_name, group_name) VALUES (?,?)`, "full", "core")
+	mustExec(t, db, `INSERT INTO active_monitors (service_name, monitor_type, target, interval_seconds, enabled) VALUES (?,?,?,?,?)`,
+		"full", "tcp", "db:5432", 60, 1)
+	mustExec(t, db, `INSERT INTO service_alert_routes (service_name, channels) VALUES (?,?)`, "full", "discord")
+	setMaintenanceState(db, "full", true, "planned")
+
+	// "partial" has only a group — everything else must come back zero-value,
+	// not leak from "full".
+	mustExec(t, db, `INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+		"partial", "up", "ok", time.Now().UTC().Format(time.RFC3339))
+	mustExec(t, db, `INSERT INTO service_groups (service_name, group_name) VALUES (?,?)`, "partial", "edge")
+
+	// "bare" has nothing configured in any of the four tables at all.
+
+	export, err := buildConfigExport(db, false)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	byName := make(map[string]ConfigService, len(export.Services))
+	for _, s := range export.Services {
+		byName[s.Name] = s
+	}
+
+	full, ok := byName["full"]
+	if !ok {
+		t.Fatal("\"full\" missing from export")
+	}
+	if full.Group != "core" {
+		t.Errorf("full.Group = %q, want core", full.Group)
+	}
+	if full.Monitor == nil || full.Monitor.Target != "db:5432" {
+		t.Errorf("full.Monitor = %+v, want target db:5432", full.Monitor)
+	}
+	if len(full.AlertChannels) != 1 || full.AlertChannels[0] != "discord" {
+		t.Errorf("full.AlertChannels = %v, want [discord]", full.AlertChannels)
+	}
+	if !full.Maintenance {
+		t.Error("full.Maintenance = false, want true")
+	}
+
+	partial, ok := byName["partial"]
+	if !ok {
+		t.Fatal("\"partial\" missing from export")
+	}
+	if partial.Group != "edge" {
+		t.Errorf("partial.Group = %q, want edge", partial.Group)
+	}
+	if partial.Monitor != nil {
+		t.Errorf("partial.Monitor = %+v, want nil — full's monitor must not leak onto partial", partial.Monitor)
+	}
+	if len(partial.AlertChannels) != 0 {
+		t.Errorf("partial.AlertChannels = %v, want none", partial.AlertChannels)
+	}
+	if partial.Maintenance {
+		t.Error("partial.Maintenance = true, want false — full's maintenance state must not leak onto partial")
+	}
+
+	bare, ok := byName["bare"]
+	if !ok {
+		t.Fatal("\"bare\" missing from export")
+	}
+	if bare.Group != "" || bare.Monitor != nil || len(bare.AlertChannels) != 0 || bare.Maintenance {
+		t.Errorf("bare = %+v, want every field at its zero value", bare)
+	}
+}
+
+// buildConfigExport's per-service lookups now share one query per table
+// (serviceINClause) instead of a QueryRow per service per table, and that
+// query's error was previously discarded with "_ = db.QueryRow(...)". A
+// dropped table forces the batched query itself to fail, proving the error
+// now reaches the caller instead of the export silently proceeding with
+// empty group/monitor/maintenance data.
+func TestBuildConfigExportPropagatesQueryErrors(t *testing.T) {
+	db := newTestDB(t)
+	mustExec(t, db, `INSERT INTO status_events (service_name, status, message, timestamp) VALUES (?,?,?,?)`,
+		"svc", "up", "ok", time.Now().UTC().Format(time.RFC3339))
+	mustExec(t, db, `DROP TABLE service_alert_routes`)
+
+	if _, err := buildConfigExport(db, false); err == nil {
+		t.Error("buildConfigExport returned no error with service_alert_routes missing, want the query failure surfaced")
+	}
+}
+
+// The monitor validation fields (body_pattern/json_path/json_expect) are read
+// back after the INSERT during import, since ConfigMonitor doesn't carry
+// them. That read was previously "_ = db.QueryRow(...)": a failure there
+// silently restarted the scheduler with nil fields, disabling an
+// already-configured check. Dropping body_pattern breaks only that readback
+// — the preceding INSERT (which never references these columns) still
+// succeeds — so this proves the failure is now surfaced instead of silently
+// disabling the check.
+func TestConfigImportSurfacesMonitorReadbackFailureWithoutDisablingCheck(t *testing.T) {
+	db := newTestDB(t)
+	sched := newTestScheduler(db)
+	mustExec(t, db, `ALTER TABLE active_monitors DROP COLUMN body_pattern`)
+
+	payload := `{"services":[{"name":"svc","monitor":{"type":"tcp","target":"db:5432","interval_seconds":60,"enabled":true}}]}`
+	rec := httptest.NewRecorder()
+	handleConfigImport(db, sched)(rec, httptest.NewRequest(http.MethodPost, "/api/config/import", strings.NewReader(payload)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Applied map[string]int `json:"applied"`
+		Skipped []string       `json:"skipped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Applied["monitors"] != 1 {
+		t.Errorf("applied[monitors] = %d, want 1 — the INSERT itself does not touch body_pattern and must still succeed", resp.Applied["monitors"])
+	}
+	var found bool
+	for _, p := range resp.Skipped {
+		if strings.Contains(p, "could not read back monitor validation fields") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("skipped = %v, want an entry about the readback failure", resp.Skipped)
+	}
+}
+
 func TestImportSkipsBadEntriesWithoutDiscardingGoodOnes(t *testing.T) {
 	db := newTestDB(t)
 	// newTestScheduler avoids newMonitorPool's live worker goroutines: this

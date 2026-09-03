@@ -353,10 +353,33 @@ type ConfigWebhook struct {
 	URL     string `json:"url"`
 }
 
+// serviceINClause builds a "service_name IN (?,?,...)" placeholder string
+// and the matching []any argument list for names, for batching per-service
+// lookups into one query instead of one query per name.
+func serviceINClause(names []string) (string, []any) {
+	args := make([]any, len(names))
+	placeholders := make([]string, len(names))
+	for i, n := range names {
+		args[i] = n
+		placeholders[i] = "?"
+	}
+	return strings.Join(placeholders, ","), args
+}
+
 // buildConfigExport gathers current configuration. includeSecrets is opt-in and
 // off by default: a webhook URL is the credential, so an export that carries
 // them is as sensitive as a database backup and far easier to paste into an
 // issue by accident.
+//
+// Per-service data (group, monitor, alert route, maintenance state) is loaded
+// with one batched query per table rather than one query per table per
+// service — for N services that's 4 round trips total instead of 4N+1. A
+// service simply missing from a batch's results means "not configured for
+// this table", the same meaning a sql.ErrNoRows on an individual lookup used
+// to carry; a real query error is now returned to the caller instead of
+// being silently swallowed, which previously left a service's group or
+// maintenance state looking unset (rather than "failed to read") if a
+// concurrent write caused SQLITE_BUSY mid-export.
 func buildConfigExport(db *sql.DB, includeSecrets bool) (ConfigExport, error) {
 	out := ConfigExport{
 		Version:    version,
@@ -385,34 +408,104 @@ SELECT DISTINCT service_name FROM (
 			names = append(names, n)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return out, err
+	}
 	rows.Close()
 
-	for _, name := range names {
-		svc := ConfigService{Name: name}
+	if len(names) > 0 {
+		placeholders, args := serviceINClause(names)
 
-		var group sql.NullString
-		_ = db.QueryRow(`SELECT group_name FROM service_groups WHERE service_name = ?`, name).Scan(&group)
-		if group.Valid {
-			svc.Group = group.String
+		groups := make(map[string]string, len(names))
+		grows, err := db.Query(`SELECT service_name, group_name FROM service_groups WHERE service_name IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return out, err
 		}
+		for grows.Next() {
+			var n, g string
+			if err := grows.Scan(&n, &g); err != nil {
+				grows.Close()
+				return out, err
+			}
+			groups[n] = g
+		}
+		if err := grows.Err(); err != nil {
+			grows.Close()
+			return out, err
+		}
+		grows.Close()
 
-		var m ConfigMonitor
-		var enabled int
-		err := db.QueryRow(
-			`SELECT monitor_type, target, interval_seconds, enabled FROM active_monitors WHERE service_name = ?`,
-			name).Scan(&m.Type, &m.Target, &m.IntervalSeconds, &enabled)
-		if err == nil {
+		monitors := make(map[string]ConfigMonitor, len(names))
+		mrows, err := db.Query(`SELECT service_name, monitor_type, target, interval_seconds, enabled FROM active_monitors WHERE service_name IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return out, err
+		}
+		for mrows.Next() {
+			var n string
+			var m ConfigMonitor
+			var enabled int
+			if err := mrows.Scan(&n, &m.Type, &m.Target, &m.IntervalSeconds, &enabled); err != nil {
+				mrows.Close()
+				return out, err
+			}
 			m.Enabled = enabled == 1
-			svc.Monitor = &m
+			monitors[n] = m
 		}
+		if err := mrows.Err(); err != nil {
+			mrows.Close()
+			return out, err
+		}
+		mrows.Close()
 
-		svc.AlertChannels = alertRouteFor(db, name)
+		routes := make(map[string][]string, len(names))
+		rrows, err := db.Query(`SELECT service_name, channels FROM service_alert_routes WHERE service_name IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return out, err
+		}
+		for rrows.Next() {
+			var n, raw string
+			if err := rrows.Scan(&n, &raw); err != nil {
+				rrows.Close()
+				return out, err
+			}
+			routes[n] = parseChannels(raw)
+		}
+		if err := rrows.Err(); err != nil {
+			rrows.Close()
+			return out, err
+		}
+		rrows.Close()
 
-		var maint int
-		_ = db.QueryRow(`SELECT enabled FROM service_maintenance WHERE service_name = ?`, name).Scan(&maint)
-		svc.Maintenance = maint == 1
+		maint := make(map[string]bool, len(names))
+		xrows, err := db.Query(`SELECT service_name, enabled FROM service_maintenance WHERE service_name IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return out, err
+		}
+		for xrows.Next() {
+			var n string
+			var enabled int
+			if err := xrows.Scan(&n, &enabled); err != nil {
+				xrows.Close()
+				return out, err
+			}
+			maint[n] = enabled == 1
+		}
+		if err := xrows.Err(); err != nil {
+			xrows.Close()
+			return out, err
+		}
+		xrows.Close()
 
-		out.Services = append(out.Services, svc)
+		for _, name := range names {
+			svc := ConfigService{Name: name, Group: groups[name], Maintenance: maint[name]}
+			if m, ok := monitors[name]; ok {
+				m := m
+				svc.Monitor = &m
+			}
+			svc.AlertChannels = routes[name]
+			out.Services = append(out.Services, svc)
+		}
 	}
 
 	wrows, err := db.Query(`SELECT channel, url FROM webhook_configs ORDER BY channel ASC`)
@@ -530,10 +623,26 @@ ON CONFLICT(service_name) DO UPDATE SET
 						// enforce it again until the next process restart.
 						if m.Enabled {
 							var bodyPattern, jsonPath, jsonExpect sql.NullString
-							_ = db.QueryRow(`SELECT body_pattern, json_path, json_expect FROM active_monitors WHERE service_name = ?`, name).
-								Scan(&bodyPattern, &jsonPath, &jsonExpect)
-							scheduler.start(name, mtype, strings.TrimSpace(m.Target), interval,
-								nullStringPtr(bodyPattern), nullStringPtr(jsonPath), nullStringPtr(jsonExpect))
+							switch err := db.QueryRow(`SELECT body_pattern, json_path, json_expect FROM active_monitors WHERE service_name = ?`, name).
+								Scan(&bodyPattern, &jsonPath, &jsonExpect); err {
+							case nil:
+								scheduler.start(name, mtype, strings.TrimSpace(m.Target), interval,
+									nullStringPtr(bodyPattern), nullStringPtr(jsonPath), nullStringPtr(jsonExpect))
+							case sql.ErrNoRows:
+								// The INSERT above just wrote this row; a missing
+								// row here would mean it was deleted concurrently.
+								// Fall back to "no check configured" rather than
+								// guessing.
+								scheduler.start(name, mtype, strings.TrimSpace(m.Target), interval, nil, nil, nil)
+							default:
+								// A real read failure (e.g. SQLITE_BUSY under
+								// concurrent writes) must not silently disable an
+								// already-configured body_pattern/json_path check
+								// by restarting the scheduler with nil fields.
+								// Surface it and leave this service's scheduler
+								// entry as it already was.
+								problems = append(problems, fmt.Sprintf("%s: could not read back monitor validation fields: %v", name, err))
+							}
 						} else {
 							scheduler.stop(name)
 						}
