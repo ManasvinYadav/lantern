@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.66.0"
+const version = "0.67.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{

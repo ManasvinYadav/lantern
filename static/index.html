@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Lantern" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="manifest" href="/manifest.json" />
-  <title>🔆 Lantern — Service Dashboard</title>
+  <title>Lantern — Service Dashboard</title>
   <style>
     
 /* =====================================================================
@@ -412,17 +412,17 @@
     }
 
     .last-updated { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-    .loading-pulse {
-      width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
-      box-shadow: 0 0 8px var(--accent-glow); margin-right: 8px;
-      animation: pulse 2s infinite;
-    }
-    .loading-pulse.loading { background: var(--text-secondary); box-shadow: none; animation: none; }
+    /* Brand mark. The housing takes the theme's secondary text colour so it
+       reads in light and dark; the glass and flame keep the logo's own fixed
+       emerald, deliberately NOT var(--accent) — a logo does not reskin with
+       the user's accent picker, and a light custom accent would swallow the
+       white flame drawn on top of it. */
+    .brand-mark { flex-shrink: 0; color: var(--text-secondary); filter: drop-shadow(0 0 5px rgba(16, 185, 129, 0.35)); }
+    .brand-flame { animation: lantern-flicker 3.4s ease-in-out infinite; }
 
-    @keyframes pulse {
-      0% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.8); }
-      100% { opacity: 1; transform: scale(1); }
+    @keyframes lantern-flicker {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.6; }
     }
 
     /* =====================================================================
@@ -1862,8 +1862,17 @@
     <header class="header">
       <div class="header-left">
         <div class="header-title">
-          <div class="loading-pulse" id="loadingIndicator"></div>
-          <img id="brandLogo" src="" alt="" style="display:none; height:22px; width:auto; border-radius:4px; vertical-align:middle;">
+          <svg class="brand-mark" id="brandMark" width="30" height="30" viewBox="0 -2.4 32 32" aria-hidden="true" focusable="false">
+            <path d="M12.2 5.6a3.8 3.8 0 0 1 7.6 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <rect x="7.5" y="5.4" width="17" height="3.6" rx="1.8" fill="currentColor"/>
+            <path d="M10.8 8.8h10.4l2.3 13H8.5Z" fill="currentColor"/>
+            <path d="M12.4 11.4h7.2l2 8.8H10.4Z" fill="#10b981"/>
+            <g class="brand-flame" transform="translate(11.56 11.86) scale(.37)">
+              <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" fill="#ecfdf5"/>
+            </g>
+            <rect x="6.6" y="21.6" width="18.8" height="3.6" rx="1.8" fill="currentColor"/>
+          </svg>
+          <img id="brandLogo" src="" alt="" style="display:none; height:24px; width:auto; border-radius:4px; vertical-align:middle;">
           <span id="brandTitle">Lantern</span>
         </div>
         <div class="header-subtitle">Service Status & Diagnostics</div>
@@ -4763,7 +4772,7 @@
       const title = (b.title || '').trim();
       const titleEl = document.getElementById('brandTitle');
       if (titleEl) titleEl.textContent = title || 'Lantern';
-      document.title = '\u{1F506} ' + (title || 'Lantern') + ' \u2014 Service Dashboard';
+      document.title = (title || 'Lantern') + ' \u2014 Service Dashboard';
 
       const logoEl = document.getElementById('brandLogo');
       if (logoEl) {
@@ -4773,6 +4782,10 @@
         logoEl.src = ok ? b.logo_url : '';
         logoEl.alt = ok ? (title || 'Lantern') + ' logo' : '';
         logoEl.style.display = ok ? '' : 'none';
+        // A custom logo replaces Lantern's own mark rather than sitting
+        // beside it — two logos in one header is nobody's brand.
+        const mark = document.getElementById('brandMark');
+        if (mark) mark.style.display = ok ? 'none' : '';
       }
 
       // Only as a default: a visitor who picked their own accent keeps it.
@@ -5178,9 +5191,6 @@
       // A gated tab has no session, so every request here would 401. Bail
       // rather than paint a connection-failure banner over the login wall.
       if (sessionGated()) return;
-      const pulse = document.getElementById('loadingIndicator');
-      if (pulse) pulse.classList.remove('loading');
-
       // Deliberately not awaited: an announcement is independent of the
       // service list, and a slow banner fetch should not delay the dashboard.
       loadIncidentBanner();

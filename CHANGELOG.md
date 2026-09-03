@@ -9,6 +9,33 @@ good idea.
 
 ---
 
+## v0.67.0 — New brand mark
+
+### Changed
+
+- **A real lantern for a logo.** The favicon and PWA icon were two unrelated
+  marks: a red Lucide "flame-kindling" outline (`#e32400`) and an amber flame
+  on a rounded square (`#f59e0b`). Both were painted in status colours — on a
+  monitoring dashboard a red tab icon reads as "something is down" at a
+  glance, and amber is `--degraded`. They are now one mark, drawn once and
+  used everywhere: a lantern housing in slate with an emerald-lit glass panel
+  and a white flame.
+- **The header has a logo.** The pulsing emerald dot beside the wordmark is
+  replaced by the lantern mark, whose flame flickers instead (and holds still
+  under `prefers-reduced-motion`, via the existing global rule). Its housing
+  follows the theme's text colour so it reads on light and dark; the glass
+  keeps the logo's own fixed emerald rather than following the accent picker,
+  since a light custom accent would swallow the white flame drawn on it. A
+  custom `logo_url` from Settings → Branding replaces the mark rather than
+  sitting beside it.
+- The `🔆` in the browser tab title is gone — the favicon does that job now.
+
+### Removed
+
+- The `.loading-pulse` indicator and its `pulse` keyframes. Its `.loading`
+  state was only ever removed, never set, so it was a permanently-pulsing dot
+  with no meaning.
+
 ## v0.66.0 — Status page branding
 
 ### Added
