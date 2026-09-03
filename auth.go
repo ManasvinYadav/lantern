@@ -573,6 +573,7 @@ func handlePostLogin(db *sql.DB, throttle *loginThrottle) http.HandlerFunc {
 		}
 		if !verifyCredentials(db, req.Username, req.Password) {
 			throttle.fail(r)
+			recordAuditAs(db, req.Username, throttleKey(r), "login", "", false, "invalid credentials")
 			writeError(w, http.StatusUnauthorized, "Invalid credentials")
 			return
 		}
@@ -584,6 +585,7 @@ func handlePostLogin(db *sql.DB, throttle *loginThrottle) http.HandlerFunc {
 			return
 		}
 		throttle.succeed(r)
+		recordAuditAs(db, req.Username, throttleKey(r), "login", "", true, "")
 		setSessionCookie(w, r, raw, exp)
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": req.Username})
 	}
@@ -649,6 +651,7 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 				return
 			}
 			if !verifyCredentials(db, currentUser, req.CurrentPassword) {
+				recordAuditAs(db, currentUser, throttleKey(r), "credentials_change", "", false, "current password did not verify")
 				writeError(w, http.StatusUnauthorized, "Current password is incorrect")
 				return
 			}
@@ -677,6 +680,7 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "Could not update credentials.")
 				return
 			}
+			recordAudit(db, r, "credentials_change", "", true, "username changed")
 		} else {
 			if len(newPass) < 8 {
 				writeError(w, http.StatusBadRequest, "New password must be at least 8 characters.")
@@ -687,6 +691,11 @@ func handlePutCredentials(db *sql.DB, cfg *Config) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "Could not update credentials.")
 				return
 			}
+			detail := "password changed"
+			if setup {
+				detail = "initial credentials set up"
+			}
+			recordAudit(db, r, "credentials_change", "", true, detail)
 		}
 
 		// Rotate: every existing session dies, including this caller's, then

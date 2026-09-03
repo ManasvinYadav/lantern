@@ -698,6 +698,8 @@ ON CONFLICT(service_name) DO UPDATE SET
 		} else {
 			scheduler.stop(name)
 		}
+		recordAudit(db, r, "monitor_change", name, true,
+			fmt.Sprintf("type=%s enabled=%t", req.MonitorType, enabled))
 
 		writeJSON(w, http.StatusOK, ActiveMonitor{
 			ServiceName:     name,
@@ -732,6 +734,7 @@ func handleDeleteServiceMonitor(db *sql.DB, scheduler *monitorScheduler) http.Ha
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		recordAudit(db, r, "monitor_delete", name, true, "")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service_name": name})
 	}
 }

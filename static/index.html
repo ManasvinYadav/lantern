@@ -2348,6 +2348,7 @@
         <div class="view-toggle" id="diagTabToggle" style="margin-bottom:16px; align-self:flex-start;">
           <button type="button" class="view-toggle-btn active" id="diagTabRuns">Diagnostic Runs</button>
           <button type="button" class="view-toggle-btn" id="diagTabActivity">Activity Log</button>
+          <button type="button" class="view-toggle-btn" id="diagTabAudit">Audit Log</button>
         </div>
 
         <div id="diagRunsPanel">
@@ -2367,6 +2368,16 @@
             A chronological feed of every status change and webhook delivery attempt across all services.
           </div>
           <div class="diag-run-list" id="activityLogList">
+            <!-- JS -->
+          </div>
+        </div>
+
+        <div id="auditLogPanel" style="display:none;">
+          <div style="font-size:11px; color:var(--text-muted); margin-bottom:12px;">
+            Admin actions: logins, credential changes, service and monitor edits, maintenance toggles,
+            config imports, and Docker restarts.
+          </div>
+          <div class="diag-run-list" id="auditLogList">
             <!-- JS -->
           </div>
         </div>
@@ -2429,6 +2440,7 @@
       deleteService: (name) => `/api/services/${encodeURIComponent(name)}`,
       badge: (name) => `/api/badge/${encodeURIComponent(name)}.svg`,
       activity: '/api/activity',
+      auditLog: '/api/admin/audit-log',
       exportHistory: (name, format) => `/api/services/${encodeURIComponent(name)}/export?format=${format}`,
       backup: '/api/backup'
     };
@@ -4278,6 +4290,7 @@
 
         document.getElementById('diagTabRuns').addEventListener('click', () => switchDiagTab('runs'));
         document.getElementById('diagTabActivity').addEventListener('click', () => switchDiagTab('activity'));
+        document.getElementById('diagTabAudit').addEventListener('click', () => switchDiagTab('audit'));
 
         // Maintenance Toggle
         // The delegated .toggle handler has already flipped aria-checked by
@@ -5903,22 +5916,22 @@
     }
 
     function switchDiagTab(tab) {
-      const runsPanel = document.getElementById('diagRunsPanel');
-      const activityPanel = document.getElementById('activityLogPanel');
-      const tabRuns = document.getElementById('diagTabRuns');
-      const tabActivity = document.getElementById('diagTabActivity');
-      if (tab === 'activity') {
-        runsPanel.style.display = 'none';
-        activityPanel.style.display = 'block';
-        tabActivity.classList.add('active');
-        tabRuns.classList.remove('active');
-        loadActivityLog();
-      } else {
-        runsPanel.style.display = 'block';
-        activityPanel.style.display = 'none';
-        tabRuns.classList.add('active');
-        tabActivity.classList.remove('active');
-      }
+      const panels = {
+        runs: document.getElementById('diagRunsPanel'),
+        activity: document.getElementById('activityLogPanel'),
+        audit: document.getElementById('auditLogPanel'),
+      };
+      const tabs = {
+        runs: document.getElementById('diagTabRuns'),
+        activity: document.getElementById('diagTabActivity'),
+        audit: document.getElementById('diagTabAudit'),
+      };
+      Object.keys(panels).forEach(key => {
+        panels[key].style.display = key === tab ? 'block' : 'none';
+        tabs[key].classList.toggle('active', key === tab);
+      });
+      if (tab === 'activity') loadActivityLog();
+      else if (tab === 'audit') loadAuditLog();
     }
 
     async function loadActivityLog() {
@@ -5956,6 +5969,42 @@
       } catch (err) {
         list.innerHTML = '<div style="color:var(--down); font-size:13px;">Failed to load activity log.</div>';
         console.error('Error loading activity log:', err);
+      }
+    }
+
+    // auditActionLabels turns the backend's action strings (login,
+    // credentials_change, service_delete, ...) into the same title-cased,
+    // space-separated form throughout the log, without a server round trip.
+    function auditActionLabel(action) {
+      return String(action || '').split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    }
+
+    async function loadAuditLog() {
+      const list = document.getElementById('auditLogList');
+      list.innerHTML = '<div style="color:var(--text-muted); font-size:13px;">Loading audit log...</div>';
+      try {
+        const res = await fetch(API.auditLog + '?limit=100');
+        if (!res.ok) throw new Error('Failed to load audit log');
+        const entries = await res.json();
+
+        if (!entries || entries.length === 0) {
+          list.innerHTML = '<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:24px; background:var(--panel-bg); border-radius:6px;">No admin actions recorded yet.</div>';
+          return;
+        }
+
+        list.innerHTML = entries.map(e => {
+          const icon = e.success ? '<span style="color:var(--up);">✓</span>' : '<span style="color:var(--down);">✕</span>';
+          const targetPart = e.target ? ` · ${escapeHtml(e.target)}` : '';
+          return `
+            <div class="diag-run-card" style="padding:10px 14px; font-size:12px;">
+              ${icon} <strong>${escapeHtml(auditActionLabel(e.action))}</strong>${targetPart}
+              <span style="color:var(--text-muted);">${formatTS(e.timestamp)}</span>
+              <div style="color:var(--text-secondary); margin-top:2px;">${escapeHtml(e.actor)} from ${escapeHtml(e.ip)}${e.detail ? ' — ' + escapeHtml(e.detail) : ''}</div>
+            </div>`;
+        }).join('');
+      } catch (err) {
+        list.innerHTML = '<div style="color:var(--down); font-size:13px;">Failed to load audit log.</div>';
+        console.error('Error loading audit log:', err);
       }
     }
 

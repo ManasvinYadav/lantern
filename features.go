@@ -277,6 +277,7 @@ func handlePutServiceAlerts(db *sql.DB) http.HandlerFunc {
 				writeError(w, http.StatusInternalServerError, "database error")
 				return
 			}
+			recordAudit(db, r, "service_alerts_change", name, true, "cleared, routes to all channels")
 			writeJSON(w, http.StatusOK, map[string]any{
 				"service_name": name, "channels": []string{}, "routes_all": true,
 			})
@@ -291,6 +292,7 @@ ON CONFLICT(service_name) DO UPDATE SET channels = excluded.channels, updated_at
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		recordAudit(db, r, "service_alerts_change", name, true, "channels="+strings.Join(clean, ","))
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"service_name": name, "channels": clean, "routes_all": false,
@@ -692,6 +694,9 @@ ON CONFLICT(channel) DO UPDATE SET url = excluded.url`, channel, strings.TrimSpa
 		}
 
 		resp := map[string]any{"status": "ok", "applied": applied}
+		detail := fmt.Sprintf("groups=%d monitors=%d alert_routes=%d webhooks=%d maintenance=%d skipped=%d",
+			applied["groups"], applied["monitors"], applied["alert_routes"], applied["webhooks"], applied["maintenance"], len(problems))
+		recordAudit(db, r, "config_import", "", true, detail)
 		if len(problems) > 0 {
 			// Reported rather than fatal: one bad service should not discard an
 			// otherwise valid import, and the caller needs to know what was

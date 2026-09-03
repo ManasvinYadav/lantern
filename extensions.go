@@ -788,6 +788,13 @@ func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		name := vars["name"]
+
+		scopedSvc := r.Context().Value(scopedServiceKey)
+		if scopedSvc != nil && scopedSvc.(string) != name {
+			writeError(w, http.StatusForbidden, "token not scoped for this service")
+			return
+		}
+
 		var req struct {
 			Enabled bool   `json:"enabled"`
 			Note    string `json:"note"`
@@ -797,6 +804,11 @@ func handlePutMaintenance(db *sql.DB) http.HandlerFunc {
 		}
 
 		now := setMaintenanceState(db, name, req.Enabled, req.Note)
+		action := "maintenance_disable"
+		if req.Enabled {
+			action = "maintenance_enable"
+		}
+		recordAudit(db, r, action, name, true, req.Note)
 
 		writeJSON(w, http.StatusOK, ServiceMaintenance{
 			ServiceName: name,
@@ -1211,6 +1223,7 @@ func handleDeleteService(db *sql.DB, scheduler *monitorScheduler) http.HandlerFu
 		// up to 15 seconds, and a service recreated under the same name inherits
 		// the old figures.
 		invalidateServiceMetricsCache(name)
+		recordAudit(db, r, "service_delete", name, true, "")
 
 		log.Printf("service deleted: %s (%v)", name, deleted)
 		writeJSON(w, http.StatusOK, map[string]any{

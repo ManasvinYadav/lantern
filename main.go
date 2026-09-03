@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.63.1"
+const version = "0.64.0"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -287,6 +287,23 @@ CREATE TABLE IF NOT EXISTS active_monitors (
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- admin_audit_log outlives whatever it names — deleting a service or
+-- rotating a token must not erase the record that it happened. It has no
+-- foreign key and is deliberately absent from serviceScopedTables.
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor      TEXT    NOT NULL,
+    action     TEXT    NOT NULL,
+    target     TEXT    NOT NULL DEFAULT '',
+    detail     TEXT,
+    success    INTEGER NOT NULL DEFAULT 1,
+    ip         TEXT    NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created
+    ON admin_audit_log(created_at DESC);
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("failed to apply schema: %v", err)
@@ -1957,12 +1974,15 @@ func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 			return err
 		}
 
+		var touched []string
+
 		// Single channel payload: { "channel": "discord", "url": "..." }
 		if ch, ok := req["channel"]; ok {
 			if err := saveChannel(ch, req["url"]); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			touched = append(touched, strings.ToLower(strings.TrimSpace(ch)))
 		} else {
 			// Multi-channel map: { "discord": "...", "telegram": "..." }
 			for ch, rawURL := range req {
@@ -1970,8 +1990,14 @@ func handlePutWebhooks(db *sql.DB) http.HandlerFunc {
 					writeError(w, http.StatusBadRequest, err.Error())
 					return
 				}
+				touched = append(touched, strings.ToLower(strings.TrimSpace(ch)))
 			}
 		}
+
+		// Only the channel names are recorded, never the URLs — a webhook URL
+		// is itself a credential (see isProtectedEndpoint's note on this route).
+		sort.Strings(touched)
+		recordAudit(db, r, "webhook_config_change", strings.Join(touched, ","), true, "")
 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "webhook configurations updated"})
 	}
@@ -2273,6 +2299,7 @@ func handlePutServiceGroup(db *sql.DB) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		recordAudit(db, r, "service_group_change", name, true, "group="+group)
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":       "ok",
@@ -2484,6 +2511,7 @@ func setupRoutes(db *sql.DB, cfg *Config, dispatcher *webhookDispatcher, hub *ws
 	api.Handle("/webhooks/test", handleTestWebhook(db, cfg)).Methods(http.MethodPost)
 	api.Handle("/webhooks/deliveries", handleGetWebhookDeliveries(db)).Methods(http.MethodGet)
 	api.Handle("/activity", handleGetActivity(db)).Methods(http.MethodGet)
+	api.Handle("/admin/audit-log", handleGetAuditLog(db)).Methods(http.MethodGet)
 	api.Handle("/backup", handleBackup(db)).Methods(http.MethodGet)
 	api.Handle("/groups", handleGetGroups(db)).Methods(http.MethodGet)
 

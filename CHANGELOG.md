@@ -9,6 +9,33 @@ good idea.
 
 ---
 
+## v0.64.0 — Admin action audit log
+
+### Added
+
+- **`GET /api/admin/audit-log`**: a persisted record of admin actions —
+  logins (success and failure, with source IP), credential changes, service
+  deletion, group/alert-route/monitor edits, maintenance mode toggles,
+  webhook channel changes (channel names only, never the URLs), config
+  imports, and Docker container restarts. Each entry records who (the
+  session/admin-token caller as `"admin"`, or a scoped token as
+  `"token:<service>"`), what, the target, success/failure, source IP, and
+  timestamp. Closes the "login throttling is in-memory only, no persisted
+  record of login attempts or config changes" gap from the last audit.
+  Admin-only — see `isAdminOnlyEndpoint` below. Viewable from the
+  Diagnostics drawer's new "Audit Log" tab.
+
+### Fixed
+
+- **Scoped API tokens could disable another service's maintenance mode
+  (High).** `PUT /api/services/{name}/maintenance` was the one mutating
+  per-service handler without a scoped-token ownership check — the same
+  class of gap Fix 1 (v0.62.4) closed for the monitor endpoints. A token
+  issued to service A could silence service B's alerts by flipping B into
+  maintenance mode, or falsely mark it under maintenance to mask a real
+  outage. Found while wiring the audit log's own admin-only gating; fixed
+  the same way as the earlier monitor-handler fix.
+
 ## v0.63.1 — Scoped API tokens could authenticate against admin-only routes
 
 ### Fixed

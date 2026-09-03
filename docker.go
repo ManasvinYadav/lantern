@@ -583,6 +583,7 @@ func handlePostDockerRestart(db *sql.DB, cfg *Config, dispatcher *webhookDispatc
 			"Container restart initiated via Lantern Admin", time.Now().UTC(), 0); err != nil {
 			log.Printf("handlePostDockerRestart: failed to record restart for %s: %v", name, err)
 		}
+		recordAudit(db, r, "docker_restart", name, true, container.ID[:12])
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":       "ok",
