@@ -9,6 +9,91 @@ good idea.
 
 ---
 
+## v0.70.0 — Multi-user accounts with roles
+
+Closes the last item from the production-readiness audit. Lantern held exactly
+one operator; it now has accounts.
+
+### Added
+
+- **Accounts with three roles**, at **Settings → Users** (owner only) or
+  [`/api/admin/users`](docs/API.md):
+
+  | | viewer | admin | owner |
+  |---|---|---|---|
+  | Read the dashboard, history, incidents | ✅ | ✅ | ✅ |
+  | Push status, trigger checks, maintenance mode | | ✅ | ✅ |
+  | Services, monitors, groups, alert routes, branding, quiet hours | | ✅ | ✅ |
+  | Backup, webhook URLs, config export/import, audit log | | ✅ | ✅ |
+  | Create, disable, re-role and remove accounts | | | ✅ |
+
+  Roles are coarse deliberately. Per-service access for a *person* is not
+  something Lantern needs; per-service access for a *machine* already exists as
+  scoped API tokens, which are an orthogonal axis and are unchanged.
+
+  A **viewer** is read-only and is additionally refused on the routes that carry
+  installation-wide secrets — `GET /api/backup` would hand them every password
+  hash, `GET /api/webhooks` every webhook URL. The gate runs in the auth
+  middleware before any handler; the dashboard hides controls a role cannot use,
+  but that is a courtesy, not the boundary.
+
+  Roles are read from the database on every request rather than stamped onto the
+  session, so **demoting or disabling someone binds on their very next request**
+  rather than at their next sign-in.
+
+- **Guardrails**, each refused with `409`: the last enabled owner cannot be
+  deleted, disabled or demoted, and you cannot delete the account you are signed
+  in as. Deleting or disabling an account, or resetting its password, ends that
+  account's sessions immediately.
+
+- **`GET /api/auth/session` now reports `role`**, so the dashboard can hide what
+  a caller may not do.
+
+- **[docs/CUSTOM_DOMAIN.md](docs/CUSTOM_DOMAIN.md)** and a full pass over the
+  README and every guide, covering everything shipped since v0.62 — group
+  rollups, the audit log, quiet hours, branding, and accounts. The README's
+  feature list was a flat wall of 35 bullets and is now grouped by what someone
+  is actually trying to find out.
+
+- **Six regenerated screenshots**, captured against the current UI over a seeded
+  install rather than whatever happened to be on screen.
+
+### Changed
+
+- **Upgrading is automatic.** The single operator in the pre-v0.70
+  `admin_credentials` row becomes the **owner** on first boot, password digest
+  carried across rather than re-hashed, so the same credentials keep working.
+  The legacy table is left in place so a downgrade still finds what it expects.
+  Verified end to end by building v0.67.1, writing services, branding and a
+  quiet-hours schedule through it, then booting this version on that database.
+
+- **`PUT /api/auth/credentials` changes your own account**, and now requires a
+  signed-in session rather than merely a credential. A caller holding only
+  `LANTERN_AUTH_TOKEN` has no account to change — letting a machine credential
+  rewrite a person's password is exactly what `/api/admin/*` refuses. It also
+  revokes only *your* sessions, not everyone's.
+
+- **`LANTERN_AUTH_TOKEN` authenticates as admin, never owner.** A static string
+  in an environment variable should be able to run the installation, not mint
+  accounts on it.
+
+- **Audit entries name the acting user** instead of a shared `"admin"`.
+
+### Fixed
+
+- **`loadData()` threw a `ReferenceError` on every 30-second poll.** The v0.67.0
+  brand commit removed the `pulse` binding but left a use of it in the `finally`
+  block, so the header's "last updated" clock stopped advancing and the console
+  filled up. Present in v0.67.0 and v0.67.1.
+
+- **Account management is refused on an install with no credentials.** Such an
+  install is wide open by design, so without this any passer-by could `POST`
+  themselves an owner and lock the real operator out.
+
+- **`.btn` had no `:disabled` styling**, though every other control does. A
+  button the app had deliberately turned off looked exactly like one that
+  worked.
+
 ## v0.67.1 — Branding logo blocked by our own CSP
 
 ### Fixed
