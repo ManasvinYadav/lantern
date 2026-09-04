@@ -9,6 +9,17 @@ good idea.
 
 ---
 
+## v0.70.1 — Startup log said auth was off while it was on
+
+### Fixed
+
+- The `listening on :7654 (auth=...)` line reported `LANTERN_AUTH_USER`, not the
+  gate `authMiddleware` actually enforces. An install whose operator signs in
+  with a stored account — every install upgraded to v0.70.0 — logged
+  `auth=false` on boot while refusing unauthenticated requests correctly. The
+  gate was never wrong; only the line describing it was. Pre-existing, but
+  v0.70.0 is where it started applying to the common case.
+
 ## v0.70.0 — Multi-user accounts with roles
 
 Closes the last item from the production-readiness audit. Lantern held exactly

@@ -83,7 +83,7 @@ services:
       - socket-proxy
 
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.70.0
+    image: ghcr.io/manasvinyadav/lantern:v0.70.1
     container_name: lantern
     restart: unless-stopped
     ports:

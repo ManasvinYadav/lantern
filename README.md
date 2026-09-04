@@ -1,6 +1,6 @@
 # Lantern
 
-> ### Current release: v0.70.0 — stable since v0.60.0
+> ### Current release: v0.70.1 — stable since v0.60.0
 >
 > The REST API and database schema are considered stable. Breaking changes will come
 > with a major version bump and upgrade notes. Pinning a version tag rather than
@@ -108,7 +108,7 @@ The easiest way to get started is with Docker Compose.
 ```yaml
 services:
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.70.0
+    image: ghcr.io/manasvinyadav/lantern:v0.70.1
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -170,7 +170,7 @@ services:
       - socket-proxy
 
   lantern:
-    image: ghcr.io/manasvinyadav/lantern:v0.70.0
+    image: ghcr.io/manasvinyadav/lantern:v0.70.1
     container_name: lantern
     restart: unless-stopped
     ports:

@@ -32,7 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const version = "0.70.0"
+const version = "0.70.1"
 
 // validStatuses is the set of accepted status values for a service event.
 var validStatuses = map[string]bool{
@@ -2780,8 +2780,12 @@ func main() {
 	defer stop()
 
 	go func() {
+		// authRequired() || AuthEnabled is exactly what authMiddleware's final
+		// switch gates on. Printing AuthEnabled alone said auth=false on an
+		// install whose login gate was on, which is the wrong way round to be
+		// wrong about.
 		log.Printf("Lantern v%s listening on :%s (auth=%v, db=%s, retention=%dd)",
-			version, cfg.Port, cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
+			version, cfg.Port, authRequired() || cfg.AuthEnabled, cfg.DBPath, cfg.RetentionDays)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server error: %v", err)
 		}
